@@ -48,15 +48,15 @@ class FraudDetectionModel:
             'n_jobs': -1
         },
         'xgboost': {
-            'n_estimators': 100,
-            'max_depth': 6,
+            'n_estimators': 15,
+            'max_depth': 5,
             'learning_rate': 0.01,
             'min_child_weight': 5,
             'colsample_bytree': 1.0,
             'scale_pos_weight': 20, 
             'subsample': 1.0,
-            'objective': 'binary:logistic',
-            'eval_metric': 'auc',
+            'objective': 'binary:hinge',
+            'eval_metric': 'aucpr',
             'random_state': 42,
             'n_jobs': -1,
             'use_label_encoder': False

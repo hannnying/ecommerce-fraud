@@ -26,7 +26,7 @@ class FraudDataPreprocessor:
         self.drop_cols = [
             "user_id", "signup_time", "purchase_time",
             "device_id", "ip_address", "country",
-            "sex", "age", "transactions_by_user_id", "age_group"
+            "sex", "transactions_by_user_id"
         ]
 
     def fit(self, X_train, y_train=None):
@@ -114,7 +114,7 @@ def load_and_preprocess_data(train_path, test_path, target_col="class"):
     drop_cols = [
             "user_id", "signup_time", "purchase_time",
             "device_id", "ip_address", "country",
-            "sex", "age", "transactions_by_user_id", "age_group"
+            "sex", "transactions_by_user_id"
         ]
     drop_cols = [col for col in drop_cols if col in train_df.columns]
 
