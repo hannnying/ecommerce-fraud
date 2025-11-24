@@ -2,15 +2,22 @@
 Training Script for Fraud Detection Models
 
 This script provides a command-line interface to train and evaluate
-fraud detection models.
+fraud detection models with support for custom parameters, resampling,
+and feature selection.
 
 Usage:
 ------
 # Train best model (Logistic Regression)
 python train.py
 
-# Train specific model
-python train.py --model random_forest
+# Train specific model with resampling
+python train.py --model random_forest --resampling smote
+
+# Train with specific columns
+python train.py --columns "age,purchase_value,source,browser"
+
+# Train with custom parameters
+python train.py --model logistic_regression --params '{"C": 0.01, "max_iter": 500}'
 
 # Train and save model
 python train.py --model logistic_regression --save
@@ -21,6 +28,7 @@ python train.py --compare
 
 import argparse
 import sys
+import json
 from pathlib import Path
 
 # Add src to path
@@ -39,23 +47,25 @@ from src.config import (
 )
 
 
-def train_single_model(model_type='logistic_regression', save_model=False, show_plots=True):
+def train_single_model(
+        columns=None,
+        resampling_type='random_undersampling',
+        model_type='logistic_regression',
+        custom_params=None,
+        save_model=False,
+        show_plots=False):
     """
     Train a single fraud detection model.
 
-    Parameters
-    ----------
-    model_type : str
-        Type of model to train
-    save_model : bool
-        Whether to save the trained model
-    show_plots : bool
-        Whether to display evaluation plots
+    Args:
+        columns (list): List of strings specifying columns to use for modelling.
+        resampling_type (str): Type of model used for resampling: 'randon_undersamping', 'enn', 'smote', 'smoteenn'.
+        model_type (str): Type of model: 'logistic_regression', 'random_forest', 'xgboost'
+        custom_params (dict): Custom hyperparameters to override defaults
+        save_model (bool): Whether to save the trained model
+        show_plots (bool): Whether to display evaluation plots
 
-    Returns
-    -------
-    tuple
-        (model, metrics, evaluator)
+    Returns: (model, metrics, evaluator)
     """
     print(f"\n{'='*70}")
     print(f"Training {MODEL_CONFIGS[model_type]['display_name']}")
@@ -72,7 +82,18 @@ def train_single_model(model_type='logistic_regression', save_model=False, show_
 
     # Initialize model
     print(f"\nInitializing {model_type} model...")
-    model = FraudDetectionModel(model_type=model_type)
+    print(f"Resampling technique: {resampling_type}")
+    if columns:
+        print(f"Using selected columns: {columns}")
+    if custom_params:
+        print(f"Custom parameters: {custom_params}")
+
+    model = FraudDetectionModel(
+        columns=columns,
+        resampling_type=resampling_type,
+        model_type=model_type,
+        custom_params=custom_params
+    )
 
     # Train model
     print("Training model...")
@@ -87,6 +108,7 @@ def train_single_model(model_type='logistic_regression', save_model=False, show_
     # Evaluate model
     evaluator = ModelEvaluator(model_name=MODEL_CONFIGS[model_type]['display_name'])
     metrics = evaluator.evaluate(y_test, y_pred, y_proba, print_report=True)
+    evaluator.evaluate_business(y_pred)
 
     # Check for overfitting
     print(f"\n{'='*70}")
@@ -136,9 +158,12 @@ def train_single_model(model_type='logistic_regression', save_model=False, show_
     return model, metrics, evaluator
 
 
-def compare_all_models():
+def compare_all_models(resampling_type='random_undersampling'):
     """
     Train and compare all available models.
+
+    Args:
+        resampling_type (str): Type of resampling to use for all models
 
     Returns
     -------
@@ -147,6 +172,7 @@ def compare_all_models():
     """
     print(f"\n{'='*70}")
     print("Training and Comparing All Models")
+    print(f"Resampling technique: {resampling_type}")
     print(f"{'='*70}\n")
 
     results = {}
@@ -156,6 +182,7 @@ def compare_all_models():
             print(f"\n--- Training {model_type} ---")
             _, metrics, _ = train_single_model(
                 model_type=model_type,
+                resampling_type=resampling_type,
                 save_model=False,
                 show_plots=False
             )
@@ -183,14 +210,17 @@ def compare_all_models():
 def main():
     """Main entry point for training script."""
     parser = argparse.ArgumentParser(
-        description="Train fraud detection models",
+        description="Train fraud detection models with custom parameters and resampling",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python train.py                           # Train best model (Logistic Regression)
-  python train.py --model random_forest     # Train Random Forest
-  python train.py --model logistic_l1 --save # Train and save model
-  python train.py --compare                 # Compare all models
+  python train.py                                    # Train best model (Logistic Regression)
+  python train.py --model random_forest              # Train Random Forest
+  python train.py --resampling smote                 # Train with SMOTE resampling
+  python train.py --columns "age,purchase_value"     # Train with selected columns
+  python train.py --params '{"C": 0.01}'             # Train with custom parameters
+  python train.py --model logistic_regression --save # Train and save model
+  python train.py --compare --resampling enn         # Compare all models with ENN
         """
     )
 
@@ -200,6 +230,28 @@ Examples:
         default='logistic_regression',
         choices=list(MODEL_CONFIGS.keys()),
         help='Model type to train'
+    )
+
+    parser.add_argument(
+        '--resampling',
+        type=str,
+        default='random_undersampling',
+        choices=['random_undersampling', 'enn', 'smote', 'smoteenn'],
+        help='Resampling technique to handle class imbalance (default: random_undersampling)'
+    )
+
+    parser.add_argument(
+        '--columns',
+        type=str,
+        default=None,
+        help='Comma-separated list of column names to use for training (default: all columns)'
+    )
+
+    parser.add_argument(
+        '--params',
+        type=str,
+        default=None,
+        help='Custom model parameters as JSON string, e.g., \'{"C": 0.01, "max_iter": 500}\''
     )
 
     parser.add_argument(
@@ -226,14 +278,34 @@ Examples:
     MODELS_DIR.mkdir(exist_ok=True)
     FIGURES_DIR.mkdir(exist_ok=True)
 
+    # Process columns argument
+    columns = None
+    if args.columns:
+        columns = [col.strip() for col in args.columns.split(',')]
+        print(f"Selected columns: {columns}")
+
+    # Process custom parameters
+    custom_params = None
+    if args.params:
+        try:
+            custom_params = json.loads(args.params)
+            print(f"Custom parameters: {custom_params}")
+        except json.JSONDecodeError as e:
+            print(f"Error parsing custom parameters: {e}")
+            print("Parameters should be valid JSON, e.g., '{\"C\": 0.01, \"max_iter\": 500}'")
+            sys.exit(1)
+
     try:
         if args.compare:
             # Compare all models
-            compare_all_models()
+            compare_all_models(resampling_type=args.resampling)
         else:
             # Train single model
             train_single_model(
+                columns=columns,
+                resampling_type=args.resampling,
                 model_type=args.model,
+                custom_params=custom_params,
                 save_model=args.save,
                 show_plots=not args.no_plots
             )

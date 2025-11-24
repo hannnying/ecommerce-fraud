@@ -10,6 +10,9 @@ Best performing models:
 - XGBoost: Lower recall, significant overfitting issues
 """
 
+from imblearn.combine import SMOTEENN
+from imblearn.over_sampling import SMOTE
+from imblearn.under_sampling import EditedNearestNeighbours, RandomUnderSampler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
@@ -63,20 +66,27 @@ class FraudDetectionModel:
         }
     }
         
-    def __init__(self, model_type='logistic_regression', custom_params=None):
+    def __init__(self, columns=None, resampling_type='random_undersampling', model_type='logistic_regression', custom_params=None):
         """
-        Initialize fraud detection model.
+        Initialize fraud detection model with resampling technique.
 
-        Parameters
-        ----------
-        model_type : str
-            Type of model: 'logistic_regression', 'random_forest', 'xgboost'
-        custom_params : dict, optional
-            Custom hyperparameters to override defaults
+        Args:
+            columns (list): List of strings specifying columns to use for modelling.
+            resampling_type (str): Type of model used for resampling: 'randon_undersamping', 'enn', 'smote', 'smoteenn'.
+            model_type (str): Type of model: 'logistic_regression', 'random_forest', 'xgboost'
+            custom_params (dict): Custom hyperparameters to override defaults
+
         """
+
+        self.resampling_type = resampling_type
+        self.resampler = None
+        self.columns = columns # None: all columns
         self.model_type = model_type
         self.model = None
         self.feature_importance_ = None
+
+        # Initialize resampling used
+        self._initialize_resampling()
 
         # Get hyperparameters
         if custom_params:
@@ -86,6 +96,22 @@ class FraudDetectionModel:
 
         # Initialize model
         self._initialize_model()
+
+    def _initialize_resampling(self):
+        """Initialize the resampler based on resampling_type."""
+        if self.resampling_type == "random_undersampling":
+            self.resampler = RandomUnderSampler(random_state=42, replacement=False)
+        elif self.resampling_type == "enn":
+            self.resampler = EditedNearestNeighbours(n_neighbors=3)
+        elif self.resampling_type == "smote":
+            self.resampler = SMOTE(random_state=42)
+        elif self.resampling_type == "smoteenn":
+            self.resampler = SMOTEENN(
+                smote=SMOTE(k_neighbors=5, sampling_strategy="auto"),
+                enn=EditedNearestNeighbours(n_neighbors=3, kind_sel='all')
+            )
+        else:
+            raise ValueError(f"Unknown resampling_type: {self.resampling_type}")
 
     def _initialize_model(self):
         """Initialize the model based on model_type."""
@@ -100,10 +126,9 @@ class FraudDetectionModel:
 
     def fit(self, X_train, y_train):
         """
-        Train the model.
+        Resample to handle class imbalance and train the model.
 
-        Parameters
-        ----------
+        Args
         X_train : pd.DataFrame or np.array
             Training features
         y_train : pd.Series or np.array
@@ -113,10 +138,14 @@ class FraudDetectionModel:
         -------
         self
         """
-        self.model.fit(X_train, y_train)
+        if self.columns:
+            X_train = X_train[self.columns]
+
+        X_train_resampled, y_train_resampled = self.resampler.fit_resample(X_train, y_train)
+        self.model.fit(X_train_resampled, y_train_resampled)
 
         # Extract feature importance
-        self._extract_feature_importance(X_train)
+        self._extract_feature_importance(X_train_resampled)
 
         return self
 
@@ -134,6 +163,9 @@ class FraudDetectionModel:
         np.array
             Predicted labels (0 or 1)
         """
+        if self.columns:
+            X = X[self.columns]
+
         return self.model.predict(X)
 
     def predict_proba(self, X):
@@ -150,6 +182,9 @@ class FraudDetectionModel:
         np.array
             Predicted probabilities for each class
         """
+        if self.columns:
+            X = X[self.columns]
+            
         return self.model.predict_proba(X)
 
     def _extract_feature_importance(self, X_train):
@@ -258,6 +293,7 @@ class FraudModelTuner:
         self.best_params_ = None
         self.best_score_ = None
         self.best_model_ = None
+
 
     def tune(self, X_train, y_train, param_grid, verbose=1):
         """

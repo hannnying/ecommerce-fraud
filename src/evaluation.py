@@ -8,6 +8,7 @@ Extracted from notebooks/baseline_models.ipynb fit_predict_join() function
 and evaluation sections.
 """
 
+from src.config import TARGET_COL, TEST_DATA_PATH
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -24,6 +25,8 @@ from sklearn.metrics import (
     roc_curve,
     precision_recall_curve
 )
+import streamlit as st
+from typing import Dict
 
 
 class ModelEvaluator:
@@ -43,6 +46,7 @@ class ModelEvaluator:
             Name of the model being evaluated
         """
         self.model_name = model_name
+        self.test = pd.read_csv(TEST_DATA_PATH)
         self.metrics = {}
 
     def evaluate(self, y_true, y_pred, y_proba=None, print_report=True):
@@ -95,7 +99,233 @@ class ModelEvaluator:
             print(f"\n{classification_report(y_true, y_pred, digits=4)}")
 
         return self.metrics
+    
+    def evaluate_business(
+            self,
+            y_pred: np.ndarray,
+            recovery_rate: float = 0.7,
+            chargeback_rate_caught: float = 0.4,
+            chargeback_rate_missed: float = 0.7,
+            processing_fee: float = 10,
+            chargeback_penalty: float = 50,
+            manual_review_cost: float = 8,
+            customer_lifetime_value: float = 100,
+            abandonment_rate: float = 0.3,
+            new_customer_churn_rate: float = 0.5,
+            repeat_customer_churn_rate: float = 0.15,
+            investigation_cost: float = 200,
+            investigation_rate: float = 0.5
+    ) -> Dict:
+        """
+        Translate model performance metrics into business value.
+     
+        Args:
+            y_pred: Model predictions (0=legitimate, 1=fraud)
+            recovery_rate: % of caught fraud that is actually prevented (default: 0.7)
+            chargeback_rate_caught: % of caught fraud that would've been chargebacks (default: 0.4)
+            chargeback_rate_missed: % of missed fraud that becomes chargebacks (default: 0.7)
+            processing_fee: Bank fee per chargeback (default: $25)
+            chargeback_penalty: Additional penalty if high chargeback rate (default: $50)
+            manual_review_cost: Cost to manually review flagged transaction (default: $8)
+            customer_lifetime_value: Average CLV (default: $2000)
+            abandonment_rate: % customers who abandon after false decline (default: 0.3)
+            new_customer_churn_rate: % new customers who never return after FP (default: 0.5)
+            repeat_customer_churn_rate: % repeat customers who churn after FP (default: 0.15)
+            investigation_cost: Cost to investigate fraud incident (default: $200)
+            investigation_rate: % of missed fraud that gets investigated (default: 0.5)
+        
+        Returns:
+            Dictionary containing all business metrics
+        """
+        test = self.test
+        test["pred"] = y_pred
+        avg_purchase_value = test["purchase_value"].mean()
 
+        tp_tn = test[test[TARGET_COL] == y_pred]
+        fp_fn = test[test[TARGET_COL] != y_pred]
+
+        tp = tp_tn[tp_tn[TARGET_COL] == 1]
+        tn = tp_tn[tp_tn[TARGET_COL] == 0]
+        fp = fp_fn[fp_fn[TARGET_COL] == 0]
+        fn = fp_fn[fp_fn[TARGET_COL] == 1]
+
+        # TN - Legitimate Correctly Approved
+        tn_count = len(tn)
+        realised_revenue = tn["purchase_value"].sum()
+        satisfaction_value  = tn_count * 2
+        tn_efficiency_gain = tn_count * 7.50
+        tn_metrics = {
+            'count': int(tn_count),
+            'revenue_realized': float(realised_revenue),
+            'satisfaction_value': float(satisfaction_value),
+            'efficiency_gain': float(tn_efficiency_gain),
+            'total_benefit': float(satisfaction_value + tn_efficiency_gain)
+        }
+
+        # TP - Fraud Correctly Caught
+        tp_count = len(tp)
+        tp_total_value = tp["purchase_value"].sum()
+        tp_average_value = tp["purchase_value"].mean() if tp_count > 0 else avg_purchase_value
+        
+        # 1. Revenue protected (we stopped the fraud before completion)
+        tp_protected_revenue = tp_total_value * recovery_rate
+
+        # 2. Chargeback prevention
+        # Not all caught fraud would become chargebacks (some are testing, etc. )
+        # Chargeback cost = Transaction value + Processing fee + Penalty (cost to cover administrative costs of the chargeback process)
+        tp_avg_chargeback_cost = tp_average_value + processing_fee + chargeback_penalty
+        tp_chargebacks_prevented_count = tp_count * chargeback_rate_caught
+        tp_chargeback_prevention = tp_chargebacks_prevented_count * tp_avg_chargeback_cost
+
+        # 3. Customer trust value (protecting legitimate cardholders)
+        tp_customers_protected = tp_count * 0.85
+        tp_trust_value = tp_customers_protected * customer_lifetime_value * 0.05
+        
+        tp_total_benefit = tp_protected_revenue + tp_chargeback_prevention + tp_trust_value
+
+        tp_metrics = {
+            'count': int(tp_count),
+            'total_transaction_value': float(tp_total_value),
+            'avg_transaction_value': float(tp_average_value),
+            'revenue_protected': float(tp_protected_revenue),
+            'chargebacks_prevented_count': float(tp_chargebacks_prevented_count),
+            'customer_trust_value': float(tp_trust_value),
+            'total_benefit': float(tp_total_benefit)
+        }
+        
+        # FP - Legitimate Flagged as Fraud 
+        fp_count = len(fp)
+        fp_total_value = fp["purchase_value"].sum()
+        fp_avg_value = fp["purchase_value"].mean() if fp_count > 0 else avg_purchase_value
+
+        # 1. Manual review cost (direct operational cost)
+        fp_manual_review_cost = fp_count * manual_review_cost
+
+        # 2. Customer friction - abandoned purchases
+        fp_abandoned_count = fp_count * abandonment_rate
+        fp_friction_cost = fp_abandoned_count * fp_avg_value
+
+        # 3. Customer lifetime value loss (permanent churn)
+        fp_new_customers = fp["is_ip_single_device"].sum()
+        fp_repeat_customers = fp_count - fp_new_customers
+
+        fp_clv_loss = (
+            fp_new_customers * new_customer_churn_rate * customer_lifetime_value +
+            fp_repeat_customers * repeat_customer_churn_rate * customer_lifetime_value
+        )
+
+        # 4. Brand reputation damage
+        fp_reputation_cost = fp_count * 0.08 * 100 # 8% share experience, $100 per incident
+        fp_total_cost = (
+            fp_manual_review_cost +
+            fp_friction_cost +
+            fp_clv_loss +
+            fp_reputation_cost
+        )
+
+        fp_metrics = {
+            'count': int(fp_count),
+            'total_transaction_value': float(fp_total_value),
+            'avg_transaction_value': float(fp_avg_value),
+            'manual_review_cost': float(fp_manual_review_cost),
+            'friction_cost': float(fp_friction_cost),
+            'clv_loss': float(fp_clv_loss),
+            'reputation_cost': float(fp_reputation_cost),
+            'total_cost': float(fp_total_cost)
+        }
+
+        # FN - Fraud Missed
+        fn_count = len(fn)
+        fn_total_value = fn["purchase_value"].sum()
+        fn_avg_value = fn['purchase_value'].mean() if fn_count > 0 else avg_purchase_value
+
+        # 1. Revenue loss (merchandise/service already delivered)
+        # Some fraud is recovered through insurance, law enforcement, etc.
+        fn_missed_recovery_rate = 0.2  # Only 20% of missed fraud recovered
+        fn_revenue_loss = fn_total_value * (1 - fn_missed_recovery_rate)
+
+        # 2. Chargeback costs (THE BIG ONE for missed fraud)
+        # Higher rate because customers dispute when they see unauthorized charges
+        fn_avg_chargeback_cost = fn_avg_value + processing_fee + chargeback_penalty
+        fn_chargeback_count = fn_count * chargeback_rate_missed
+        fn_chargeback_cost = fn_chargeback_count * fn_avg_chargeback_cost
+
+        # 3. Investigation costs
+        fn_investigation_cost = fn_count * investigation_rate * investigation_cost
+
+        # 4. Regulatory costs (fines for fraud patterns)
+        fn_regulatory_fine_prob = 0.05 # 5% chance of fining per incident
+        fn_avg_regulatory_fine = 10000
+        fn_regulatory_cost = fn_count * fn_regulatory_fine_prob * fn_avg_regulatory_fine
+
+        fn_total_cost = (
+            fn_revenue_loss +
+            fn_chargeback_cost +
+            fn_investigation_cost +
+            fn_regulatory_cost
+        )
+
+        fn_metrics = {
+            'count': int(fn_count),
+            'total_transaction_value': float(fn_total_value),
+            'avg_transaction_value': float(fn_avg_value),
+            'revenue_loss': float(fn_revenue_loss),
+            'chargeback_cost': float(fn_chargeback_cost),
+            'chargeback_count': float(fn_chargeback_count),
+            'investigation_cost': float(fn_investigation_cost),
+            'regulatory_cost': float(fn_regulatory_cost),
+            'total_cost': float(fn_total_cost)
+        }
+
+        # Summary 
+        total_transactions = len(test)
+        fraud_rate = (test["class"] == 1).sum() / total_transactions
+         # Calculate rates
+        fraud_detection_rate = tp_count / (tp_count + fn_count) if (tp_count + fn_count) > 0 else 0
+        false_positive_rate = fp_count / (fp_count + tn_count) if (fp_count + tn_count) > 0 else 0
+        precision = tp_count / (tp_count + fp_count) if (tp_count + fp_count) > 0 else 0
+        
+        # Financial summary
+        total_benefits = tp_total_benefit + tn_metrics['total_benefit']
+        total_costs = fp_total_cost + fn_total_cost
+        net_business_value = total_benefits - total_costs
+        
+        # ROI calculation (investment = operational costs)
+        investment = fp_manual_review_cost
+        roi_percentage = (net_business_value / investment * 100) if investment > 0 else 0
+        
+        summary = {
+            'total_transactions': int(total_transactions),
+            'fraud_rate': float(fraud_rate),
+            'fraud_detection_rate': float(fraud_detection_rate),
+            'false_positive_rate': float(false_positive_rate),
+            'precision': float(precision),
+            'total_benefits': float(total_benefits),
+            'total_costs': float(total_costs),
+            'net_business_value': float(net_business_value),
+            'roi_percentage': float(roi_percentage)
+        }
+
+        results = {
+            'true_positives': tp_metrics,
+            'true_negatives': tn_metrics,
+            'false_positives': fp_metrics,
+            'false_negatives': fn_metrics,
+            'summary': summary,
+            'parameters': {
+                'recovery_rate': recovery_rate,
+                'chargeback_rate_caught': chargeback_rate_caught,
+                'chargeback_rate_missed': chargeback_rate_missed,
+                'processing_fee': processing_fee,
+                'chargeback_penalty': chargeback_penalty,
+                'manual_review_cost': manual_review_cost,
+                'customer_lifetime_value': customer_lifetime_value
+            }
+        }
+
+        return results
+
+        
     def plot_confusion_matrix(self, y_true, y_pred, figsize=(8, 6), save_path=None):
         """
         Plot confusion matrix.

@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import FunctionTransformer, StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
 
@@ -26,19 +26,24 @@ class FraudDataPreprocessor:
         self.drop_cols = [
             "user_id", "signup_time", "purchase_time",
             "device_id", "ip_address", "country",
-            "sex", "transactions_by_user_id"
+            "sex", "transactions_by_user_id", "age_group"
         ]
 
     def fit(self, X_train, y_train=None):
         """Fit the preprocessor on training data."""
         self._identify_feature_types(X_train)
 
+        def bool_to_int(X):
+            X = X.fillna(False)
+            return X.astype(int)
+
         # create Column Transformer to transform numeric and categorical columns
         self.preprocessor = ColumnTransformer(
             transformers=[
                 ("num", StandardScaler(), self.numeric_features),
                 ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False),
-                 self.categorical_features)
+                self.categorical_features),
+                ("bool", FunctionTransformer(bool_to_int), self.boolean_features)
             ],
             remainder='drop'  # Drop everything else initially
         )
@@ -49,9 +54,13 @@ class FraudDataPreprocessor:
         cat_features = self.preprocessor.named_transformers_["cat"].get_feature_names_out(
             self.categorical_features
         )
-        self.feature_names = list(num_features) + list(cat_features) + self.boolean_features
+        bool_features = self.boolean_features
+
+        self.feature_names = list(num_features) + list(cat_features) + list(bool_features)
 
         self.is_fitted = True
+
+        print(f"Fitted preprocessor: {self.preprocessor}")
 
         return self
     
@@ -67,9 +76,9 @@ class FraudDataPreprocessor:
         cat_features = self.preprocessor.named_transformers_["cat"].get_feature_names_out(
             self.categorical_features
         )
-        base_features = list(num_features) + list(cat_features)
+        bool_features = self.boolean_features
+        base_features = list(num_features) + list(cat_features) + list(bool_features)
         X_scaled = pd.DataFrame(X_trans, columns=base_features, index=X.index)
-        X_scaled = pd.concat([X_scaled, X[self.boolean_features]], axis=1)
        
         return X_scaled
     
@@ -79,11 +88,16 @@ class FraudDataPreprocessor:
  
     def _identify_feature_types(self, X):
         all_features = [col for col in X.columns if col not in self.drop_cols + ["class"]]
+        print(f"There are a total of {len(all_features)} features: {all_features}")
 
         self.numeric_features = [f for f in all_features if X[f].dtype in ["int64", "float64"]]
-        self.boolean_features = [f for f in all_features if X[f].dtype=="bool"]
-        self.categorical_features = [f for f in all_features if (f not in self.numeric_features) and (f not in self.boolean_features)]
+        print(f"There are a total of {len(self.numeric_features)}: {self.numeric_features}")
 
+        self.boolean_features = [f for f in all_features if X[f].dtype=="bool"]
+        print(f"There are a total of {len(self.boolean_features)}: {self.boolean_features}")
+
+        self.categorical_features = [f for f in all_features if (f not in self.numeric_features) and (f not in self.boolean_features)]
+        print(f"There are a total of {len(self.categorical_features)}: {self.categorical_features}")
 
 def load_and_preprocess_data(train_path, test_path, target_col="class"):
     # load train and test data
@@ -137,22 +151,3 @@ def load_and_preprocess_data(train_path, test_path, target_col="class"):
 
     return X_train_processed, X_test_processed, y_train, y_test, preprocessor
     
-
-# def train_test_split_index(train_df, test_df, test_size=0.2, random_state=42):
-#     # both train_df and test_df have the same number of rows, but are separate due to data leakage when aggregating column values
-#     rows = len(train_df)
-#     indices = np.arange(rows)
-#     y = train_df["class"]
-    
-#     train_indices, test_indices = train_test_split(
-#         indices,
-#         test_size=test_size,
-#         random_state=random_state,
-#         stratify=y
-#     )
-
-#     # Select corresponding samples
-#     train = train_df.iloc[train_indices]
-#     test = test_df.iloc[test_indices]
-
-#     return train, test
