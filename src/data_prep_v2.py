@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
+from src.config import TARGET_COL
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
@@ -46,15 +47,22 @@ class FraudFeatureEngineer:
         total_transactions (int): Total number of transactions in training data
     """
 
-    def __init__(self, ip_country_path="../data/IpAddress_to_Country.csv", gdp_data_path="../data/gdp_usd.xlsx"):
+    def __init__(
+            self,
+            ip_country_path="data/IpAddress_to_Country.csv", 
+            transaction_country_path="data/fraud_with_country.csv",
+            gdp_data_path="data/gdp_usd.xlsx"
+        ):
         """
         Initializes a new instance of FraudFeatureEngineer.
 
         Args:
             ip_country_path (str): Path to the IP-to-country mapping CSV file.
+            transaction_country_path (str): Path to raw dataset with country mapped to IP. 
             gdp_data_path (str): Path to the GDP data Excel file.
         """
         self.ip_mapping = pd.read_csv(ip_country_path)
+        self.transaction_country_path = transaction_country_path
         self.gdp_data = pd.read_excel(gdp_data_path, index_col=0).loc[2015.0,].to_dict()
         self.country_map = {
             "Korea Republic of": "Korea, Rep.",
@@ -119,7 +127,7 @@ class FraudFeatureEngineer:
         self.total_transactions = 0
 
 
-    def fit(self, df, target_col='class'):
+    def fit(self, df, target_col=TARGET_COL):
         """
         Fit preprocessing parameters on training data
 
@@ -210,7 +218,7 @@ class FraudFeatureEngineer:
         # Store GDP rankings (need to process geo features first to get country info)
         # This will be calculated during transform for training data
         print(f"  GDP rankings will be calculated during transform")
-
+        
         return self
 
     def transform(self, df, is_training=False):
@@ -719,11 +727,9 @@ class FraudFeatureEngineer:
             logging.info(f"IP Address {ip_address} mapped to country: {country}")
             return country
 
-        filepath = os.path.join(os.getcwd(), "../data/fraud_with_country.csv")
-
-        if os.path.exists(filepath):
+        if os.path.exists(self.transaction_country_path):
             # Load the country mapping and merge it with the current dataframe
-            country_mapping = pd.read_csv(filepath)[['ip_address', 'country']]
+            country_mapping = pd.read_csv(self.transaction_country_path)[['ip_address', 'country']]
             df = df.drop('ip_address', axis=1)
             df = pd.merge(df, country_mapping, left_index=True, right_index=True)
 
@@ -752,8 +758,8 @@ class FraudFeatureEngineer:
                 self.country_transaction_counts = df['country'].value_counts().to_dict()
 
                 # Calculate fraud rate by country
-                if 'class' in df.columns:
-                    country_fraud = df.groupby('country')['class'].agg(['sum', 'count'])
+                if TARGET_COL in df.columns:
+                    country_fraud = df.groupby('country')[TARGET_COL].agg(['sum', 'count'])
                     self.fraud_rate_by_country = (country_fraud['sum'] / country_fraud['count']).to_dict()
                     print(f"  Fraud rates calculated for {len(self.fraud_rate_by_country)} countries")
 
@@ -766,9 +772,9 @@ class FraudFeatureEngineer:
                 df['country_rarity_normalized'] = df['country_rarity'] / (max_rarity + 1e-8)
 
                 # Fraud rate by country
-                if self.fraud_rate_by_country: 
+                if self.fraud_rate_by_country:
                     df['fraud_rate_by_country'] = df['country'].map(self.fraud_rate_by_country)
-                    overall_fraud_rate = df['class'].mean() if 'class' in df.columns else 0.1
+                    overall_fraud_rate = df[TARGET_COL].mean() if TARGET_COL in df.columns else 0.1
                     df['fraud_rate_by_country'].fillna(overall_fraud_rate, inplace=True)
                 else:
                     df['fraud_rate_by_country'] = 0.1  # HY: Shouldn't default value be a central tendency
@@ -923,7 +929,7 @@ class FraudFeatureEngineer:
 
         return df
 
-    def fit_transform(self, df, target_col='class'):
+    def fit_transform(self, df, target_col=TARGET_COL):
         """
         Fit on training data and transform
 
@@ -937,7 +943,7 @@ class FraudFeatureEngineer:
         self.fit(df, target_col)
         return self.transform(df, is_training=True)
 
-    def preprocess_pipeline(self, train_df, test_df=None, target_col='class'):
+    def preprocess_pipeline(self, train_df, target_col=TARGET_COL, test_df=None,):
         """
         Complete preprocessing pipeline for train and optionally test data
 
@@ -973,51 +979,3 @@ class FraudFeatureEngineer:
             return train_processed, test_processed
 
         return train_processed
-
-
-if __name__ == "__main__":
-    """
-    Example demonstrating proper train/test split preprocessing
-    """
-
-    # Initialize feature engineer
-    feature_engineer = FraudFeatureEngineer(
-        ip_country_path="../data/IpAddress_to_Country.csv",
-        gdp_data_path="../data/gdp_usd.xlsx"
-    )
-
-    # Load your data
-    df = pd.read_csv("../data/Fraud_Data.csv")
-
-    # Split into train and test
-    from sklearn.model_selection import train_test_split
-    train_df, test_df = train_test_split(df, test_size=0.2, random_state=42, stratify=df['class'])
-
-    print(f"SIZE OF TRAIN DATA: {len(train_df)}, SIZE OF TEST DATA: {len(test_df)}")
-
-    # Process both train and test
-    train_processed, test_processed = feature_engineer.preprocess_pipeline(
-        train_df=train_df,
-        test_df=test_df,
-        target_col='class'
-    )
-    print(f"SIZE OF TRAIN DATA: {len(train_processed)}, SIZE OF TEST DATA: {len(test_processed)}")
-
-    # Save dataset
-    train_processed.to_csv("../data/train.csv")
-    test_processed.to_csv("../data/test.csv")
-
-    print("\n" + "="*60)
-    print("PREPROCESSING COMPLETE")
-    print("="*60)
-    print("\nKey points:")
-    print("✓ Training data: Statistics calculated from training set")
-    print("✓ Test data: Uses training statistics (NO DATA LEAKAGE)")
-    print("✓ New devices/IPs in test: Use global statistics as fallback")
-    print("\nNew features added:")
-    print("✓ source_device_consistency: Tracks unique sources per device")
-    print("✓ browser_device_consistency: Tracks unique browsers per device")
-    print("✓ country_rarity: Identifies transactions from rare countries")
-    print("✓ fraud_rate_by_country: Country-specific fraud rates from training")
-    print("✓ device_lifespan_days: Time between first and last device transaction")
-    print("✓ transactions_last_hour_device: Recent transaction velocity")

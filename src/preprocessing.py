@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.preprocessing import FunctionTransformer, StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
+from src.config import TARGET_COL
 
 
 class FraudDataPreprocessor:
@@ -29,13 +30,13 @@ class FraudDataPreprocessor:
             "sex", "transactions_by_user_id", "age_group"
         ]
 
+    def bool_to_int(self, X):
+        X = X.fillna(False)
+        return X.astype(int)
+
     def fit(self, X_train, y_train=None):
         """Fit the preprocessor on training data."""
         self._identify_feature_types(X_train)
-
-        def bool_to_int(X):
-            X = X.fillna(False)
-            return X.astype(int)
 
         # create Column Transformer to transform numeric and categorical columns
         self.preprocessor = ColumnTransformer(
@@ -43,7 +44,7 @@ class FraudDataPreprocessor:
                 ("num", StandardScaler(), self.numeric_features),
                 ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False),
                 self.categorical_features),
-                ("bool", FunctionTransformer(bool_to_int), self.boolean_features)
+                ("bool", FunctionTransformer(self.bool_to_int), self.boolean_features)
             ],
             remainder='drop'  # Drop everything else initially
         )
@@ -90,7 +91,9 @@ class FraudDataPreprocessor:
         all_features = [col for col in X.columns if col not in self.drop_cols + ["class"]]
         print(f"There are a total of {len(all_features)} features: {all_features}")
 
-        self.numeric_features = [f for f in all_features if X[f].dtype in ["int64", "float64"]]
+        # Recognize ALL numeric dtypes (int8, int16, int32, int64, float16, float32, float64)
+        import numpy as np
+        self.numeric_features = [f for f in all_features if np.issubdtype(X[f].dtype, np.number)]
         print(f"There are a total of {len(self.numeric_features)}: {self.numeric_features}")
 
         self.boolean_features = [f for f in all_features if X[f].dtype=="bool"]
@@ -99,55 +102,38 @@ class FraudDataPreprocessor:
         self.categorical_features = [f for f in all_features if (f not in self.numeric_features) and (f not in self.boolean_features)]
         print(f"There are a total of {len(self.categorical_features)}: {self.categorical_features}")
 
-def load_and_preprocess_data(train_path, test_path, target_col="class"):
-    # load train and test data
-    # split into train and test sets
-    # drop unused and repeated cols > transform numerical and categorical > 
-    original_idx = ["Unnamed: 0"]
-    
-    try:
-        train_df = pd.read_csv(train_path).drop(columns=original_idx)
-        test_df = pd.read_csv(test_path).drop(columns=original_idx)
-    except Exception as e:
-        print(f"Try running 'data_prep.py': {e}")
+    def preprocess(self, df):
+        """Drop columns and split into X, y before further processing."""
+        original_idx = "Unnamed: 0"
+        print(df)
 
-    # Drop additional columns from data_prep.py (repeats of txn_count_by)
-    additional_drops = [
-        "transactions_by_device_id", "transactions_by_ip_address",
-        "purchase_count_by_device", "purchase_count_by_ip"
-    ]
-    for col in additional_drops:
-        if col in train_df.columns:
-            train_df = train_df.drop(columns=[col])
-            test_df = test_df.drop(columns=[col])
+        if original_idx in df.columns:
+            df = df.drop(columns=[original_idx])
 
-    print(f"Train shape: {train_df.shape}")
-    print(f"Test shape: {test_df.shape}")
-
-    # check if columns to drop are in train data
-    drop_cols = [
-            "user_id", "signup_time", "purchase_time",
-            "device_id", "ip_address", "country",
-            "sex", "transactions_by_user_id"
+        # Drop additional columns from data_prep.py (repeats of txn_count_by)
+        additional_drops = [
+            "transactions_by_device_id", "transactions_by_ip_address",
+            "purchase_count_by_device", "purchase_count_by_ip"
         ]
-    drop_cols = [col for col in drop_cols if col in train_df.columns]
+        for col in additional_drops:
+            if col in df.columns:
+                df = df.drop(columns=[col])
 
-    # Separate features and target
-    y_train = train_df[target_col]
-    X_train = train_df.drop(columns=drop_cols + [target_col])
+        # check if columns to drop are in train data
+        drop_cols = [
+                "user_id", "signup_time", "purchase_time",
+                "device_id", "ip_address", "country",
+                "sex", "transactions_by_user_id"
+            ]
+        drop_cols = [col for col in drop_cols if col in df.columns]
 
-    y_test = test_df[target_col]
-    X_test = test_df.drop(columns=drop_cols + [target_col])
+        # Separate features and target
+        if TARGET_COL in df:
+            y = df[TARGET_COL]
+            X = df.drop(columns=drop_cols + [TARGET_COL])
+            return X, y
+        else:
+            X = df.drop(columns=drop_cols)
+            return X, pd.DataFrame()
 
-    # Initialize and fit preprocessor
-    print("\nPreprocessing features...")
-    preprocessor = FraudDataPreprocessor()
-    X_train_processed = preprocessor.fit_transform(X_train)
-    X_test_processed = preprocessor.transform(X_test)
-
-    print(f"Processed train shape: {X_train_processed.shape}")
-    print(f"Processed test shape: {X_test_processed.shape}")
-    print(f"Number of features: {len(preprocessor.feature_names)}")
-
-    return X_train_processed, X_test_processed, y_train, y_test, preprocessor
-    
+        

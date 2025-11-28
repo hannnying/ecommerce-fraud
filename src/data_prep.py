@@ -40,6 +40,7 @@ class FraudFeatureEngineer:
         self.global_purchase_std = None
         self.global_purchase_mean = None
         self.fraud_rate_by_month = None
+        self.fraud_rate_by_country = {} # (country, fraud_rate)
 
         # Device and IP level statistics (learned from training)
         self.device_stats_dict = {}
@@ -59,9 +60,14 @@ class FraudFeatureEngineer:
         self.device_ip_consistency_map = {}
         self.ip_device_consistency_map = {}
 
+        # Source/Browser-Device consistency statistics
+        self.device_source_consistency_map = {}
+        self.device_browser_consistency_map = {}
+
         # Velocity statistics (for time-based features)
         self.device_last_purchase_time = {}
         self.ip_last_purchase_time = {}
+        self.span_days = {}
 
         # GDP ranking statistics
         self.gdp_rank_map = {}

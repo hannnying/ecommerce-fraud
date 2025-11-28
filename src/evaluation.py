@@ -8,7 +8,7 @@ Extracted from notebooks/baseline_models.ipynb fit_predict_join() function
 and evaluation sections.
 """
 
-from src.config import TARGET_COL, TEST_DATA_PATH
+from config import TARGET_COL, TEST_DATA_PATH
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -562,12 +562,3 @@ def evaluate_overfitting(model, X_train, y_train, X_test, y_test):
     overfitting_df = pd.concat([overfitting_df, pd.DataFrame([diff_row])], ignore_index=True)
 
     return overfitting_df
-
-
-if __name__ == "__main__":
-    print("Model Evaluation Utilities")
-    print("\nExample usage:")
-    print("evaluator = ModelEvaluator(model_name='Logistic Regression')")
-    print("metrics = evaluator.evaluate(y_test, y_pred, y_proba)")
-    print("evaluator.plot_confusion_matrix(y_test, y_pred)")
-    print("evaluator.plot_roc_curve(y_test, y_proba)")

@@ -239,7 +239,7 @@ class FraudDetectionModel:
         print(f"Model saved to {filepath}")
 
     @classmethod
-    def load(cls, filepath, model_type='logistic_l1'):
+    def load(cls, filepath, model_type='logistic_regression'):
         """
         Load model from disk.
 
@@ -271,7 +271,15 @@ class FraudModelTuner:
     best_model = tuner.tune(X_train, y_train, param_grid)
     """
 
-    def __init__(self, model_type='logistic_regression', scoring='recall', cv=5, n_jobs=-1):
+    def __init__(
+            self,
+            model_type='logistic_regression',
+            scoring='recall',
+            cv=5,
+            n_jobs=-1,
+            columns=None,
+            resampling_type="random_undersampling"
+    ):
         """
         Initialize model tuner.
 
@@ -290,46 +298,34 @@ class FraudModelTuner:
         self.scoring = scoring
         self.cv = cv
         self.n_jobs = n_jobs
+        self.columns = columns
+        self.resampling_type = resampling_type
         self.best_params_ = None
         self.best_score_ = None
         self.best_model_ = None
 
-
     def tune(self, X_train, y_train, param_grid, verbose=1):
-        """
-        Perform grid search hyperparameter tuning.
+        base_model = FraudDetectionModel(
+            columns=self.columns, 
+            resampling_type=self.resampling_type,
+            model_type=self.model_type
+        )
+        
+        if base_model.columns:
+            X_train = X_train[base_model.columns]
 
-        Parameters
-        ----------
-        X_train : pd.DataFrame or np.array
-            Training features
-        y_train : pd.Series or np.array
-            Training labels
-        param_grid : dict
-            Parameter grid for grid search
-        verbose : int
-            Verbosity level
+        X_res, y_res = base_model.resampler.fit_resample(X_train, y_train)
 
-        Returns
-        -------
-        FraudDetectionModel
-            Best model found
-        """
-        # Initialize base model
-        base_model = FraudDetectionModel(model_type=self.model_type)
-
-        # Grid search
         grid_search = GridSearchCV(
             estimator=base_model.model,
             param_grid=param_grid,
             cv=self.cv,
             scoring=self.scoring,
             n_jobs=self.n_jobs,
-            verbose=verbose
         )
 
-        grid_search.fit(X_train, y_train)
-
+        grid_search.fit(X_res, y_res)
+        
         # Store results
         self.best_params_ = grid_search.best_params_
         self.best_score_ = grid_search.best_score_
@@ -340,28 +336,15 @@ class FraudModelTuner:
 
         # Create FraudDetectionModel with best parameters
         best_fraud_model = FraudDetectionModel(
+            columns=self.columns, 
+            resampling_type=self.resampling_type,
             model_type=self.model_type,
             custom_params=self.best_params_
         )
         best_fraud_model.model = self.best_model_
 
-        return best_fraud_model
+        return best_fraud_model, grid_search
 
-
-# Convenience functions for quick model access
-def get_best_logistic_model():
-    """Get the best Logistic Regression model."""
-    return FraudDetectionModel(model_type='logistic_regression')
-
-
-def get_best_random_forest_model():
-    """Get the best Random Forest model (tuned to prevent overfitting)."""
-    return FraudDetectionModel(model_type='random_forest')
-
-
-def get_best_xgboost_model():
-    """Get the best XGBoost model (note: may have overfitting issues)."""
-    return FraudDetectionModel(model_type='xgboost')
 
 
 if __name__ == "__main__":
