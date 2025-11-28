@@ -1,67 +1,43 @@
 import streamlit as st
-import pandas as pd
-import json
-import src.config as config
-from src.evaluation import ModelEvaluator
-from src.models import FraudDetectionModel
-from src.preprocessing import load_and_preprocess_data
+import requests
 
-st.title("Fraud Detection Model Dashboard")
-
-@st.cache_data
-def load_test_data(path):
-    return pd.read_csv(path, index_col=0)
-
-X_train, X_test, y_train, y_test, preprocessor = load_and_preprocess_data(
-    str(config.TRAIN_DATA_PATH),
-    str(config.TEST_DATA_PATH),
-    target_col=config.TARGET_COL
+purchase_value = st.number_input("Purchase Value", min_value=0)
+source = st.selectbox(
+    "Source",
+    ("SEO", "Direct", "Ads")
 )
-
-# Features
-columns = [col for col in X_train.columns if col != config.TARGET_COL]
-feature_cols = st.multiselect(
-    label="Select Features for Fraud Detection Model",
-    options=columns,
-    default=columns
+browser = st.selectbox(
+    "Browser",
+    ("Chrome", "Firefox", "IE", "Opera", "Safari")
 )
-
-# Resampler
-resampler = st.selectbox(
-    label="Resampling Method",
-    options=["random_undersampling", "enn", "smote", "smoteenn"]
+sex = st.selectbox(
+    "Sex",
+    ("M", "F")
 )
+age = st.number_input("Age", min_value=0)
 
-# Model
-model_type = st.selectbox(
-    label="Model",
-    options=["logistic_regression", "random_forest", "xgboost"]
-)
-
-# Hyperparameters
-custom_params = st.text_area(
-    label="Hyperparameters (JSON)",
-    value=""
-)
-
-params = {}
-if custom_params:
+if st.button("Make Transaction"):
     try:
-        params = json.loads(custom_params)
-    except json.JSONDecodeError:
-        st.error("Invalid JSON format for hyperparameters.")
+        payload = {
+            "purchase_value": purchase_value,
+            "source": source,
+            "browser": browser,
+            "sex": sex,
+            "age": age
+        }
+        response = requests.post("http://127.0.0.1:8000/predict/single", json=payload)
+        if response.status_code == 200:
+            result = response.json()
+            predicted_class = result["predicted_class"][0]
+            probability = result["probability"][0]
 
-if st.button("Evaluate My Model"):
-    model = FraudDetectionModel(
-        columns=columns,
-        resampling_type=resampler,
-        model_type=model_type,
-        custom_params=custom_params
-    )
-
-    model.fit(X_train, y_train)
-
-    y_pred = model.predict(X_test)
-    evaluator = ModelEvaluator(model_name=config.MODEL_CONFIGS[model_type]['display_name'])
-
-    st.markdown(evaluator.evaluate_business(y_pred))
+            if predicted_class:
+                st.error("❌ Transaction Declined")
+            elif probability >= 0.3: # warning verify
+                st.error("Transaction to be reviewed")
+            else:
+                st.success("✅ Transaction Approved!")
+        else:
+            st.error(f"API Error: {response.status_code}")
+    except Exception as e:
+        st.error(f"Error: {e}")
