@@ -29,7 +29,7 @@ FIGURES_DIR = RESULTS_DIR / "figures"
 FIGURES_DIR.mkdir(exist_ok=True)
 
 # Target column
-TARGET_COL = "class"
+TARGET_COL = "is_fraud"
 
 # Columns to drop before modeling
 DROP_COLS = [
