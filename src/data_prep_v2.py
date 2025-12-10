@@ -4,10 +4,16 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from src.config import TARGET_COL
+from src.config import (
+    IP_COUNTRY_PATH,
+    GDP_DATA_PATH,
+    FRAUD_WITH_COUNTRY_PATH,
+    TARGET_COL
+)
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
+
 
 class FraudFeatureEngineer:
     """
@@ -49,9 +55,9 @@ class FraudFeatureEngineer:
 
     def __init__(
             self,
-            ip_country_path="data/IpAddress_to_Country.csv", 
-            transaction_country_path="data/fraud_with_country.csv",
-            gdp_data_path="data/gdp_usd.xlsx"
+            ip_country_path=None, 
+            transaction_country_path=None,
+            gdp_data_path=None
         ):
         """
         Initializes a new instance of FraudFeatureEngineer.
@@ -61,6 +67,13 @@ class FraudFeatureEngineer:
             transaction_country_path (str): Path to raw dataset with country mapped to IP. 
             gdp_data_path (str): Path to the GDP data Excel file.
         """
+        if ip_country_path is None:
+            ip_country_path = IP_COUNTRY_PATH
+        if transaction_country_path is None:
+            transaction_country_path = FRAUD_WITH_COUNTRY_PATH
+        if gdp_data_path is None:
+            gdp_data_path = GDP_DATA_PATH
+
         self.ip_mapping = pd.read_csv(ip_country_path)
         self.transaction_country_path = transaction_country_path
         self.gdp_data = pd.read_excel(gdp_data_path, index_col=0).loc[2015.0,].to_dict()
@@ -127,7 +140,7 @@ class FraudFeatureEngineer:
         self.total_transactions = 0
 
 
-    def fit(self, df, target_col=TARGET_COL):
+    def fit(self, df, target_col=None):
         """
         Fit preprocessing parameters on training data
 
@@ -138,6 +151,9 @@ class FraudFeatureEngineer:
             target_col (str): Name of fraud indicator column
         """
         print("Fitting preprocessing parameters on training data...")
+
+        if not target_col:
+            target_col = TARGET_COL
 
         # Calculate global purchase statistics
         self.global_purchase_mean = df['purchase_value'].mean()

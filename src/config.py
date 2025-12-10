@@ -2,35 +2,86 @@
 Configuration file for fraud detection project.
 
 Contains paths, constants, and hyperparameters used throughout the project.
+Only uses environment variables for settings that differ between environments.
 """
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
-# Project root directory
+# Load environment variables from .env file (if it exists)
+load_dotenv()
+
+# ============================================================================
+# Environment Configuration (from env vars)
+# ============================================================================
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+
+# ============================================================================
+# Project Paths (constants - work the same everywhere)
+# ============================================================================
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# Data paths
+# ============================================================================
+# Data Paths (constants)
+# ============================================================================
 DATA_DIR = PROJECT_ROOT / "data"
-TRAIN_DATA_PATH = DATA_DIR / "train.csv"
-TEST_DATA_PATH = DATA_DIR / "test.csv"
+
+# Input data files
 RAW_DATA_PATH = DATA_DIR / "Fraud_Data.csv"
 IP_COUNTRY_PATH = DATA_DIR / "IpAddress_to_Country.csv"
 GDP_DATA_PATH = DATA_DIR / "gdp_usd.xlsx"
+FRAUD_WITH_COUNTRY_PATH = DATA_DIR / "fraud_with_country.csv"
 
-# Model paths
+# Processed data files
+TRAIN_DATA_PATH = DATA_DIR / "train.csv"
+TEST_DATA_PATH = DATA_DIR / "test.csv"
+RAW_TRAIN_PATH = DATA_DIR / "raw_train.csv"
+RAW_TEST_PATH = DATA_DIR / "raw_test.csv"
+
+# ============================================================================
+# Model Paths (constants)
+# ============================================================================
 MODELS_DIR = PROJECT_ROOT / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
-# Results paths
+# Model files
+FEATURE_ENGINEER_PATH = MODELS_DIR / "feature_engineer.pkl"
+PREPROCESSOR_PATH = MODELS_DIR / "preprocessor.pkl"
+MODEL_PATH = MODELS_DIR / "logistic_regression_model.pkl"
+
+# ============================================================================
+# Results Paths (constants)
+# ============================================================================
 RESULTS_DIR = PROJECT_ROOT / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 FIGURES_DIR = RESULTS_DIR / "figures"
 FIGURES_DIR.mkdir(exist_ok=True)
 
-# Target column
+# ============================================================================
+# Model Parameters (constants)
+# ============================================================================
 TARGET_COL = "is_fraud"
+RANDOM_STATE = 42
+TEST_SIZE = 0.2
+CV_FOLDS = 5
+OPTIMIZATION_METRIC = "recall"
 
+# ============================================================================
+# API Configuration (constants with sensible defaults)
+# ============================================================================
+API_HOST = "0.0.0.0"
+API_PORT = 8000
+
+# ============================================================================
+# Streamlit Configuration (constants)
+# ============================================================================
+STREAMLIT_HOST = "0.0.0.0"
+STREAMLIT_PORT = 8501
+
+# ============================================================================
+# Feature Configuration
+# ============================================================================
 # Columns to drop before modeling
 DROP_COLS = [
     "user_id", "signup_time", "purchase_time",
@@ -40,12 +91,6 @@ DROP_COLS = [
 
 # Categorical features
 CATEGORICAL_FEATURES = ["source", "browser"]
-
-# Random seed for reproducibility
-RANDOM_STATE = 42
-
-# Train/validation split
-TEST_SIZE = 0.2
 
 # Model configurations
 MODEL_CONFIGS = {

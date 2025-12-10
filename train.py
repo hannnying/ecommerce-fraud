@@ -19,7 +19,7 @@ from src.config import (
     TRAIN_DATA_PATH,
     MODEL_CONFIGS,
     FIGURES_DIR
-)
+) 
 from sklearn.model_selection import train_test_split
 
 def train_single_model(

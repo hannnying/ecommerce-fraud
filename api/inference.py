@@ -8,13 +8,14 @@ from pathlib import Path
 from pandera.typing import DataFrame
 from api.schemas import Transaction, TransactionDTO
 
-
-# determine which directory API is running from, and what model you want to use
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-FEATURE_ENGINEER_PATH = ROOT_DIR / "models" / "feature_engineer.pkl"
-PREPROCESSOR_PATH = ROOT_DIR / "models" / "preprocessor.pkl"
-MODEL_PATH = ROOT_DIR / "models" / "logistic_regression_model.pkl"
+# Import configuration from centralized config
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.config import (
+    FEATURE_ENGINEER_PATH,
+    PREPROCESSOR_PATH,
+    MODEL_PATH
+)
 
 def load_feature_engineer():
     with open(FEATURE_ENGINEER_PATH, "rb") as f:

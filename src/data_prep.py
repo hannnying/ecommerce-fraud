@@ -8,18 +8,29 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
+# Import configuration
+from config import IP_COUNTRY_PATH, GDP_DATA_PATH, FRAUD_WITH_COUNTRY_PATH, RAW_DATA_PATH
+
 class FraudFeatureEngineer:
     """
     Comprehensive preprocessing pipeline for e-commerce fraud detection
     """
     
-    def __init__(self, ip_country_path="../data/IpAddress_to_Country.csv", gdp_data_path="../data/gdp_usd.xlsx"):
+    def __init__(self, ip_country_path=None, gdp_data_path=None):
         """
         Parameters:
         -----------
-        gdp_data : dict, optional
-            Dictionary mapping country codes to GDP per capita
+        ip_country_path : str or Path, optional
+            Path to IP country mapping CSV. Uses config default if not provided.
+        gdp_data_path : str or Path, optional
+            Path to GDP data Excel file. Uses config default if not provided.
         """
+        # Use config paths if not provided
+        if ip_country_path is None:
+            ip_country_path = IP_COUNTRY_PATH
+        if gdp_data_path is None:
+            gdp_data_path = GDP_DATA_PATH
+
         self.ip_mapping = pd.read_csv(ip_country_path)
         self.gdp_data = pd.read_excel(gdp_data_path, index_col=0).loc[2015.0,].to_dict()
         self.country_map = {
@@ -495,11 +506,10 @@ class FraudFeatureEngineer:
             logging.info(f"IP Address {ip_address} mapped to country: {country}")
             return country
 
-        filepath = os.path.join(os.getcwd(), "../data/fraud_with_country.csv")
-
-        if os.path.exists(filepath):
+        # Use config path for fraud_with_country file
+        if os.path.exists(FRAUD_WITH_COUNTRY_PATH):
             # Load the country mapping and merge it with the current dataframe
-            country_mapping = pd.read_csv(filepath)[['ip_address', 'country']]
+            country_mapping = pd.read_csv(FRAUD_WITH_COUNTRY_PATH)[['ip_address', 'country']]
             df = df.drop('ip_address', axis=1)
             df = pd.merge(df, country_mapping, left_index=True, right_index=True)
 
@@ -676,15 +686,12 @@ if __name__ == "__main__":
     """
     Example demonstrating proper train/test split preprocessing
     """
-    
-    # Initialize feature engineer
-    feature_engineer = FraudFeatureEngineer(
-        ip_country_path="../data/IpAddress_to_Country.csv",
-        gdp_data_path="../data/gdp_usd.xlsx"
-    )
-    
-    # Load your data
-    df = pd.read_csv("../data/Fraud_Data.csv")
+
+    # Initialize feature engineer (uses config paths by default)
+    feature_engineer = FraudFeatureEngineer()
+
+    # Load your data from config path
+    df = pd.read_csv(RAW_DATA_PATH)
     
     # Split into train and test
     from sklearn.model_selection import train_test_split
@@ -700,9 +707,10 @@ if __name__ == "__main__":
     )
     print(f"SIZE OF TRAIN DATA: {len(train_processed)}, SIZE OF TEST DATA: {len(test_processed)}")
 
-    # Save dataset
-    train_processed.to_csv("../data/train.csv")
-    test_processed.to_csv("../data/test.csv")
+    # Save dataset using config paths
+    from config import TRAIN_DATA_PATH, TEST_DATA_PATH
+    train_processed.to_csv(TRAIN_DATA_PATH)
+    test_processed.to_csv(TEST_DATA_PATH)
     
     print("\n" + "="*60)
     print("PREPROCESSING COMPLETE")

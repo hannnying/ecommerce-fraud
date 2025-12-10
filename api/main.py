@@ -20,6 +20,12 @@ import json
 import pandas as pd
 from pandera.typing import DataFrame
 
+# Import configuration
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from src.config import RAW_TEST_PATH
+
 app = FastAPI()
 
 @app.get("/health")
@@ -28,7 +34,7 @@ def get_health():
 
 @app.post("/predict", response_model=FraudPrediction)
 def predict(
-    transaction_path: str = "data/raw_test.csv",
+    transaction_path: str = str(RAW_TEST_PATH),
     feature_engineer = Depends(get_feature_engineer),
     preprocessor = Depends(get_preprocessor),
     model = Depends(get_model)

@@ -1,5 +1,33 @@
 import streamlit as st
 import requests
+import os
+import sys
+import socket
+
+# Add src directory to path to import config
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+from config import API_PORT
+
+# Auto-detect backend hostname (Docker or local)
+def get_backend_host():
+    """
+    Auto-detect if running in Docker or locally.
+
+    Returns:
+        str: 'backend' if in Docker, '127.0.0.1' if local
+    """
+    try:
+        socket.gethostbyname('backend')
+        return 'backend'  # Running in Docker
+    except socket.gaierror:
+        return '127.0.0.1'  # Running locally
+
+# Construct backend URL: hostname + port from config
+BACKEND_HOST = get_backend_host()
+BACKEND_URL = f"http://{BACKEND_HOST}:{API_PORT}"
+
+# Display connection info (optional - remove if you don't want it)
+st.sidebar.info(f"🔗 Connected to: {BACKEND_URL}")
 
 purchase_value = st.number_input("Purchase Value", min_value=0)
 source = st.selectbox(
@@ -25,7 +53,7 @@ if st.button("Make Transaction"):
             "sex": sex,
             "age": age
         }
-        response = requests.post("http://127.0.0.1:8000/predict/single", json=payload)
+        response = requests.post(f"{BACKEND_URL}/predict/single", json=payload)
         if response.status_code == 200:
             result = response.json()
             predicted_class = result["predicted_class"][0]
