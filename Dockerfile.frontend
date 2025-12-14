@@ -8,5 +8,6 @@ RUN pip install --no-cache-dir --upgrade -r ./requirements.txt
 
 COPY ./app.py ./app.py
 COPY ./src ./src
+COPY ./data/raw_test.csv ./data/raw_test.csv
 
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]

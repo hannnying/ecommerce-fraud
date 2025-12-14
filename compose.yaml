@@ -1,19 +1,45 @@
 services:
+  redis:
+      image: "redis:alpine"
+      container_name: fraud-redis
+      ports:
+        - "6379:6379"
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
+    container_name: fraud-backend
     environment:
       - ENVIRONMENT=docker
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     ports:
       - "8000:8000"
+    depends_on:
+    - redis
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: fraud-worker
+    depends_on:
+      - redis
+    command: python -m api.worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    container_name: fraud-frontend
     ports:
       - "8501:8501"
     depends_on:
       - backend
-      
+    environment:
+      - BACKEND_HOST=backend
+      - API_PORT=8000

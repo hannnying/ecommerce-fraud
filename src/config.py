@@ -71,7 +71,20 @@ OPTIMIZATION_METRIC = "recall"
 # API Configuration (constants with sensible defaults)
 # ============================================================================
 API_HOST = "0.0.0.0"
-API_PORT = 8000
+API_PORT = int(os.getenv("API_PORT", 8000))
+BACKEND_HOST = os.getenv("BACKEND_HOST", "127.0.0.1")
+
+# ============================================================================
+# Redis Configuration
+# ============================================================================
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_DB = int(os.getenv("REDIS_DB", 0))
+
+TRANSACTION_STREAM = "transactions_stream"
+RESULT_STREAM = "results_stream"
+
+REDIS_BLOCK_TIMEOUT = int(os.getenv("REDIS_BLOCK_TIMEOUT", 5000)) # milliseconds
 
 # ============================================================================
 # Streamlit Configuration (constants)
