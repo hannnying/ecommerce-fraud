@@ -11,8 +11,9 @@ from src.config import (
     RAW_DATA_PATH,
     TARGET_COL
 )
-from src.models_v2 import FraudDetectionModel, FraudModelTuner
+from src.models.models_v2 import FraudDetectionModel, FraudModelTuner
 from src.preprocessing import FraudDataPreprocessor
+from src.state.redis_store import DeviceState
 from sklearn.metrics import classification_report
 
 class InitialTrain:
@@ -56,12 +57,6 @@ class InitialTrain:
             purchase_deviation_from_device_mean = abs(row["purchase_value"] - device_stats["purchase_sum"] / txn_count)
             device_lifespan = (device_stats["first_seen"] - row["purchase_time"]).total_seconds()
 
-            device_stats["txn_count"] += 1
-            device_stats["ip_addresses"].add(row["ip_address"])
-            device_stats["sources"].add(row["source"])
-            device_stats["last_transaction"] = row["purchase_time"]
-            device_stats["purchase_sum"] += row["purchase_value"]
-
         else:
             txn_count = 1
             device_ip_consistency = 1
@@ -69,15 +64,6 @@ class InitialTrain:
             time_since_last_device_txn = 99999
             purchase_deviation_from_device_mean = 0
             device_lifespan = 0
-
-            self.device_state[device_id] = {
-                "txn_count": 1,
-                "ip_addresses": {row["ip_address"]},
-                "sources": {row["source"]},
-                "last_transaction": row["purchase_time"],
-                "purchase_sum": row["purchase_value"],
-                "first_seen": row["purchase_time"]
-            }
         
         processed_transaction = {
             "txn_count": txn_count,
@@ -87,10 +73,31 @@ class InitialTrain:
             "time_since_last_device_txn": time_since_last_device_txn, 
             "purchase_deviation_from_device_mean": purchase_deviation_from_device_mean,
             "device_lifespan": device_lifespan,
-            "is_fraud": row["is_fraud"]
+            "is_fraud": row["is_fraud"] # may not put it here
         }
 
         return processed_transaction
+    
+    def update_device_state(self, row):
+        device_id = row["device_id"]
+        if device_id in self.device_state:
+            device_stats = self.device_state[device_id]
+            
+            device_stats["txn_count"] += 1
+            device_stats["ip_addresses"].add(row["ip_address"])
+            device_stats["sources"].add(row["source"])
+            device_stats["last_transaction"] = row["purchase_time"]
+            device_stats["purchase_sum"] += row["purchase_value"]
+
+        else:
+            self.device_state[device_id] = {
+                    "txn_count": 1,
+                    "ip_addresses": {row["ip_address"]},
+                    "sources": {row["source"]},
+                    "last_transaction": row["purchase_time"],
+                    "purchase_sum": row["purchase_value"],
+                    "first_seen": row["purchase_time"]
+                }
     
     def fit_preprocessor_model(self, df_train, df_test, params=None):
         preprocessor = FraudDataPreprocessor()
@@ -131,6 +138,7 @@ class InitialTrain:
 
         for idx, row in df.iterrows():
             processed_transaction = self.compute_features(row)
+            self.update_device_state(row)
             self.processed_transactions.append(processed_transaction)
 
         processed_transactions = pd.DataFrame(self.processed_transactions)
@@ -181,10 +189,16 @@ def main():
     if args.save:
         with open(PREPROCESSOR_PATH, "wb") as p:
             pickle.dump(preprocessor, p)
+            print(f"preprocessor saved at: {PREPROCESSOR_PATH}")
         with open(MODEL_PATH, "wb") as m:
-            pickle.dump(model, p)
+            pickle.dump(model, m)
+            print(f"model saved at: {MODEL_PATH}")
 
     # add device_state to redis
+    redis_device_state = DeviceState()
+    redis_device_state.load_initial(initial_train.device_state)
+    print(redis_device_state.get_device_state('KNENGMCLZOFYB'))
+
     # add transactions, their predictions, whether they were used in training into database
 
 

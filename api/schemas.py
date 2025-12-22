@@ -25,8 +25,8 @@ class Transactions(pa.DataFrameModel):
 
 class Transaction(BaseModel):
     user_id: int
-    signup_time: str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    purchase_time: str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    signup_time: str
+    purchase_time: str
     purchase_value: int
     device_id: str
     source: str
@@ -36,6 +36,7 @@ class Transaction(BaseModel):
     ip_address: float
 
 class TransactionDTO(BaseModel):
+
     purchase_value: int
     source: str
     browser: str

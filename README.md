@@ -8,33 +8,46 @@ This project implements a fraud detection pipeline using:
 
 Ensure that you are in /ecommerce-fraud directory.
 
-# Directory Structure
 ecommerce-fraud/
-├── api/
-|   ├── dependencies.py    
-|   ├── inference.py    
-│   ├── main.py           # FastAPI application
-│   ├── schemas.py        # Request/response models
-│   └── worker.py        
-├── models/               # Saved model artifacts
-│   └── (models saved here)
-├── src/                  # Core modules
-|   ├── config.py                  
-│   ├── data_prep_v2.py
-│   ├── evaluation.py
-│   ├── models.py
-│   ├── preprocessing.py
-│   └── utils.py
-├── data/                 # Training/test datasets
+├── api/                          # Online / real-time components
+│   ├── main.py                   # FastAPI application (API entrypoint)
+│   ├── producer.py               # Simulates real-time transactions (CSV → Redis stream)
+│  	└── consumer.py               # Consumes transactions, computes features, runs inference
+│
+├── src/                          # Core ML + data pipeline logic
+│   ├── feature_engineering/
+│   │   └── engineer.py           # Feature computation using Redis-backed device state
+│   │
+│   ├── models/
+│   │   └── models_v2.py           # Fraud models & hyperparameter tuning
+│   │
+│   ├── preprocessing.py          # Scaling & preprocessing logic
+│   │
+│   └──state/                    # Redis-backed state stores
+│   │   ├── redis_store.py         # Device state (Redis hash)
+│   │   └── serializers.py         # Serialize / deserialize Redis payloads
+├── training/
+│   └── train_v2.py            # Initial offline training on time-ordered data
+│
+├── models/                       # Persisted artifacts
+│   ├── feature_engineer.pkl
+│   ├── preprocessor.pkl
+│   └── fraud_model.pkl
+│
+├── data/                         # Raw datasets (offline)
 │   ├── Fraud_Data.csv
-│   ├── gdp_usd.xlsx
-│   └── IpAddress_to_Country.csv
-├── app.py                # Streamlit 
-├── compose.yaml.py                
-├── Dockerfile.backend              
-├── Dockerfile.frontend              
-├── requirements.txt              
-└── train.py              # Training script
+│   ├── IpAddress_to_Country.csv
+│   └── gdp_usd.xlsx
+│
+├── app.py                        # Streamlit UI (results visualization)
+│
+├── docker/                       # (Planned) Docker assets
+│   ├── Dockerfile.backend        # FastAPI backend (needs update)
+│   ├── Dockerfile.frontend       # Streamlit frontend (needs update)
+│   └── compose.yaml              # Docker Compose (WIP)
+│
+├── requirements.txt              # Python dependencies
+└── README.md
               
 
 # Installation
@@ -63,25 +76,24 @@ pip install -r requirements.txt
 Before running the app, you need to train the Logistic Regression model.
 Run:
 ```bash
-python3 train.py \
+python3 -m training.train.py \
     --model logistic_regression \
     --resampling random_undersampling \
-    --columns "txn_count_device_percentile,time_setup_to_txn_seconds,device_ip_consistency,source_device_consistency,time_since_last_device_id_txn,purchase_deviation_from_device_mean,sex_encoded" \
     --save
 ```
 
 What this does:
-1.	Fits and saves the FraudFeatureEngineer pipeline
-2.	Fits and saves the FraudDataPreprocessor pipeline
-3.	Trains a Logistic Regression model using:
-•	Random undersampling for class imbalance
-•	Only the 7 specified features
-•	Custom hyperparameters (C=0.001, max_iter=1000, penalty=l2, solver=liblinear)
-4.	Saves all components to the models/ directory:
-•	models/feature_engineer.pkl
-•	models/preprocessor.pkl
-•	models/logistic_regression_model.pkl
-
+This script performs initial offline training of the fraud detection model:
+	1.	Fits and saves the FraudDataPreprocessor
+	•	Learns scaling and preprocessing parameters from training data
+	•	Ensures consistent transformations during real-time inference
+	2.	Trains a Logistic Regression model using the first 50,000 time-ordered transactions, with:
+	•	SMOTE to address class imbalance
+	•	Hyperparameter tuning via cross-validation
+	•	Performance evaluation on a held-out 5,000-transaction test set
+	3.	Persists trained artifacts to the models/ directory:
+	•	models/preprocessor.pkl
+	•	models/logistic_regression_model.pkl
 
 ## Run the Application Locally
 
@@ -100,18 +112,64 @@ uvicorn api.main:app --reload
 ### Step 3: Start worker
 Run the worker process in another terminal:
 ```bash
-python3 -m api.worker
+python3 -m api.consumer
 ```
 
-### Step 4: Start Streamlit Simulation
-Run Streamlit to simulate transactions and view predictions
-```bash
-stremlit run app.py
-```
+## FastAPI Endpoints
 
-## Running on Docker
+Here’s a clean way to describe it in your README and FastAPI docs:
 
-```bash
-docker compose build
-docker compose up
-```
+⸻
+
+FastAPI Endpoints
+
+1. /stream – Start Transaction Simulation
+
+Description:
+Starts pushing transactions from the CSV to the Redis TRANSACTIONS_STREAM to simulate real-time events.
+
+Method: POST
+
+Response Example:
+
+{
+  "status": "queued",
+  "transaction_ids": [
+    "92d999d0-215a-4d7e-ac57-d6eec00d9111",
+    "f31b2a8c-8f4b-4d2c-9c23-12a3b4e4d5f7",
+    ...
+  ]
+}
+
+These transaction_ids correspond to the entries in the transaction stream.
+
+
+2. /get – Fetch Processed Transactions
+
+Description:
+Fetches the latest processed transactions and their predicted fraud classes from the RESULT_STREAM.
+
+Method: GET
+
+Response Example:
+
+[
+  {
+    "transaction_id": "92d999d0-215a-4d7e-ac57-d6eec00d9111",
+    "txn_count": 3,
+    "device_ip_consistency": true,
+    "device_source_consistency": true,
+    "time_setup_to_txn_seconds": 1777456.0,
+    "time_since_last_device_txn": 0.0,
+    "purchase_deviation_from_device_mean": 0.0,
+    "device_lifespan": 0.0,
+    "predicted_class": 1,
+    "fraud_probability": 0.6598676441447116
+  },
+  ...
+]
+
+Notes:
+	•	predicted_class: 1 = fraud, 0 = non-fraud
+	•	fraud_probability: probability of being fraudulent
+	•	Returned transactions include all computed features used by the model
