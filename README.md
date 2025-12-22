@@ -1,10 +1,13 @@
 # E-commerce Fraud Detection Project
+
+```text
 This project implements a fraud detection pipeline using:
 	•	FastAPI – backend API for submitting transactions and reading results
 	•	Redis Streams – message broker for queuing transactions and results
 	•	Worker – separate process for feature engineering and running inference
 	•	Streamlit – frontend for simulating and viewing transaction predictions
 	•	Scikit-learn – Logistic Regression model
+```
 
 Ensure that you are in /ecommerce-fraud directory.
 
