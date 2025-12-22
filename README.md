@@ -8,26 +8,28 @@ This project implements a fraud detection pipeline using:
 
 Ensure that you are in /ecommerce-fraud directory.
 
+```text
 ecommerce-fraud/
 ├── api/                          # Online / real-time components
 │   ├── main.py                   # FastAPI application (API entrypoint)
 │   ├── producer.py               # Simulates real-time transactions (CSV → Redis stream)
-│  	└── consumer.py               # Consumes transactions, computes features, runs inference
+│   └── consumer.py               # Consumes transactions, computes features, runs inference
 │
 ├── src/                          # Core ML + data pipeline logic
 │   ├── feature_engineering/
 │   │   └── engineer.py           # Feature computation using Redis-backed device state
 │   │
 │   ├── models/
-│   │   └── models_v2.py           # Fraud models & hyperparameter tuning
+│   │   └── models_v2.py          # Fraud models & hyperparameter tuning
 │   │
 │   ├── preprocessing.py          # Scaling & preprocessing logic
 │   │
-│   └──state/                    # Redis-backed state stores
-│   │   ├── redis_store.py         # Device state (Redis hash)
-│   │   └── serializers.py         # Serialize / deserialize Redis payloads
+│   └── state/                    # Redis-backed state stores
+│       ├── redis_store.py        # Device state (Redis hash)
+│       └── serializers.py        # Serialize / deserialize Redis payloads
+│
 ├── training/
-│   └── train_v2.py            # Initial offline training on time-ordered data
+│   └── train_v2.py               # Initial offline training on time-ordered data
 │
 ├── models/                       # Persisted artifacts
 │   ├── feature_engineer.pkl
@@ -41,14 +43,14 @@ ecommerce-fraud/
 │
 ├── app.py                        # Streamlit UI (results visualization)
 │
-├── docker/                       # (Planned) Docker assets
+├── docker/                       # Docker assets (planned)
 │   ├── Dockerfile.backend        # FastAPI backend (needs update)
 │   ├── Dockerfile.frontend       # Streamlit frontend (needs update)
 │   └── compose.yaml              # Docker Compose (WIP)
 │
 ├── requirements.txt              # Python dependencies
 └── README.md
-              
+```
 
 # Installation
 
@@ -82,18 +84,23 @@ python3 -m training.train.py \
     --save
 ```
 
+```text
 What this does:
 This script performs initial offline training of the fraud detection model:
-	1.	Fits and saves the FraudDataPreprocessor
-	•	Learns scaling and preprocessing parameters from training data
-	•	Ensures consistent transformations during real-time inference
-	2.	Trains a Logistic Regression model using the first 50,000 time-ordered transactions, with:
-	•	SMOTE to address class imbalance
-	•	Hyperparameter tuning via cross-validation
-	•	Performance evaluation on a held-out 5,000-transaction test set
-	3.	Persists trained artifacts to the models/ directory:
-	•	models/preprocessor.pkl
-	•	models/logistic_regression_model.pkl
+
+1. Fits and saves the `FraudDataPreprocessor`:
+   - Learns scaling and preprocessing parameters from training data
+   - Ensures consistent transformations during real-time inference
+
+2. Trains a Logistic Regression model using the first 50,000 time-ordered transactions:
+   - SMOTE to address class imbalance
+   - Hyperparameter tuning via cross-validation
+   - Performance evaluation on a held-out 5,000-transaction test set
+
+3. Persists trained artifacts to the `models/` directory:
+   - `models/preprocessor.pkl`
+   - `models/logistic_regression_model.pkl`
+```
 
 ## Run the Application Locally
 
@@ -117,21 +124,16 @@ python3 -m api.consumer
 
 ## FastAPI Endpoints
 
-Here’s a clean way to describe it in your README and FastAPI docs:
+### 1. /stream – Start Transaction Simulation
 
-⸻
-
-FastAPI Endpoints
-
-1. /stream – Start Transaction Simulation
-
-Description:
+**Description:**
 Starts pushing transactions from the CSV to the Redis TRANSACTIONS_STREAM to simulate real-time events.
 
-Method: POST
+**Method: POST**
 
-Response Example:
+**Response Example:**
 
+```bash
 {
   "status": "queued",
   "transaction_ids": [
@@ -140,19 +142,21 @@ Response Example:
     ...
   ]
 }
+```
 
-These transaction_ids correspond to the entries in the transaction stream.
+These `transaction_ids` correspond to the entries in the transaction stream.
 
 
-2. /get – Fetch Processed Transactions
+### 2. /get – Fetch Processed Transactions
 
-Description:
+**Description:**
 Fetches the latest processed transactions and their predicted fraud classes from the RESULT_STREAM.
 
-Method: GET
+**Method: GET**
 
-Response Example:
+**Response Example:**
 
+```bash
 [
   {
     "transaction_id": "92d999d0-215a-4d7e-ac57-d6eec00d9111",
@@ -168,6 +172,7 @@ Response Example:
   },
   ...
 ]
+```
 
 Notes:
 	•	predicted_class: 1 = fraud, 0 = non-fraud
