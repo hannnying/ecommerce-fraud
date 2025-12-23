@@ -55,7 +55,7 @@ class InitialTrain:
                                         and (row["source"] in device_stats["sources"])
             time_since_last_device_txn = (row["purchase_time"] - device_stats["last_transaction"]).total_seconds()
             purchase_deviation_from_device_mean = abs(row["purchase_value"] - device_stats["purchase_sum"] / txn_count)
-            device_lifespan = (device_stats["purchase_time"] - row["first_seen"]).total_seconds()
+            device_lifespan = (row["purchase_time"] - device_stats["first_seen"]).total_seconds()
 
         else:
             txn_count = 1
