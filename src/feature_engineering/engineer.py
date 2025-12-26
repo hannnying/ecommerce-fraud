@@ -1,4 +1,17 @@
-def compute_features(txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources , signup_time, purchase_time, purchase_value, source, ip_address):
+def compute_features(
+        txn_count,
+        purchase_sum,
+        last_transaction,
+        first_seen,
+        ip_addresses,
+        sources,
+        fraud_count,
+        signup_time,
+        purchase_time,
+        purchase_value,
+        source,
+        ip_address
+):
 
     time_setup_to_txn_seconds = (
         purchase_time - signup_time
@@ -20,4 +33,6 @@ def compute_features(txn_count, purchase_sum, last_transaction, first_seen, ip_a
 
     purchase_deviation_from_device_mean = abs(purchase_value - purchase_sum / txn_count) if txn_count else 0
 
-    return txn_count + 1, device_ip_consistency, device_source_consistency, time_setup_to_txn_seconds, time_since_last_device_id_txn, purchase_deviation_from_device_mean, device_lifespan
+    device_fraud_rate = fraud_count / (txn_count + 1)
+
+    return txn_count + 1, device_ip_consistency, device_source_consistency, time_setup_to_txn_seconds, time_since_last_device_id_txn, purchase_deviation_from_device_mean, device_lifespan, device_fraud_rate

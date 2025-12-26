@@ -8,6 +8,7 @@ import pandas as pd
 import pickle
 from redis import Redis
 from src.config import (
+    LABELS_STREAM,
     PREPROCESSOR_PATH,
     MODEL_PATH,
     REDIS_DB,
@@ -52,61 +53,105 @@ class InferenceConsumer:
         except Exception as e:
             print(f"Error loading model: {e}")
 
+    def handle_transaction(self, transaction_dict):
+        """
+        Preprocess an incoming transaction, compute features, run fraud inference, 
+        update device state based on transaction behavior and append to RESULTS_STREAM.
+        """
+        device_id = transaction_dict["device_id"]
+
+        # if device is unseen, get_device_state returns [None, .. , None]
+        txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count = self.device_state.get_device_state(device_id)
+        transaction_id, _, signup_time, purchase_time, purchase_value, device_id, source, _, _, _, ip_address = deserialize_transaction(transaction_dict)
+
+        processed_transaction = self.process_transaction(
+            txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count, signup_time, purchase_time, purchase_value, source, ip_address
+        )
+
+        self.device_state.update_device_state(
+            device_id,
+            txn_count,
+            purchase_sum,
+            last_transaction,
+            first_seen,
+            ip_addresses,
+            sources,
+            fraud_count,
+            signup_time,
+            purchase_time,
+            purchase_value,
+            source,
+            ip_address,
+        )
+        print(f"processed transaction: {transaction_id}, {processed_transaction}")
+
+        # add processed transaction df to results stream
+        self.store_result(transaction_id, device_id, processed_transaction)
+
+    
+    def handle_label(self, label_dict):
+        """
+        Join label into hash storing past transaction predictions, and update fraud_count of device state. 
+        """
         
+        transaction_id = label_dict["transaction_id"]
+        device_id = label_dict["device_id"]
+        prediction_key = f"prediction:{transaction_id}"
+        device_key = f"device:{device_id}"
+        is_fraud = int(label_dict["is_fraud"])
+
+        # look for prediction with prediction_key in hash
+        self.client.hset(prediction_key, "true_label", is_fraud)
+
+        # look for device record with device_id in hash
+        if is_fraud:
+            self.client.hincrby(device_key, "fraud_count", 1)
         
+
+
     def start_consuming(self):
         """
         Consume transactions from Redis stream and make predictions.
         """
-        last_id = "0-0"
+
+        last_txn_id = "0-0"
+        last_label_id = "0-0"
 
         while True:
-
             messages = self.client.xread(
-                streams={TRANSACTION_STREAM: last_id}, 
-                block=0
+                streams={
+                     TRANSACTION_STREAM: last_txn_id,
+                     LABELS_STREAM: last_label_id
+                }, 
+                block=5000
             )
 
             if not messages:
                 continue
 
-            _, entries = messages[0]
+            _, entries = messages
 
-            for message_id, transaction_dict in entries:
-                device_id = transaction_dict["device_id"]
-                # if device is unseen, get_device_state returns [None, .. , None]
-                txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources = self.device_state.get_device_state(device_id)
-                transaction_id, _, signup_time, purchase_time, purchase_value, device_id, source, _, _, _, ip_address = deserialize_transaction(transaction_dict)
+            for stream_name, entries in messages:
+                print(f"stream name: {stream_name}")
+                if stream_name == TRANSACTION_STREAM:
+                    last_txn_id = entries[-1][0]
 
-                processed_transaction = self.process_transaction(
-                    txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources , signup_time, purchase_time, purchase_value, source, ip_address
-                )
-                print
-                self.device_state.update_device_state(
-                    device_id,
-                    txn_count,
-                    purchase_sum,
-                    last_transaction,
-                    first_seen,
-                    ip_addresses,
-                    sources,
-                    signup_time,
-                    purchase_time,
-                    purchase_value,
-                    source,
-                    ip_address,
-                )
-                print(f"processed transaction: {transaction_id}, {processed_transaction}")
+                    for _, transaction_dict in entries:
+                        self.handle_transaction(transaction_dict)
 
-                # add processed transaction df to results stream
-                self.store_result(transaction_id, processed_transaction)
-                
+                elif stream_name == LABELS_STREAM:
+                    print(entries)
+                    last_label_id = entries[-1][0]
+
+                    for _, label_dict in entries:
+                        self.handle_label(label_dict)
+
             
-    def process_transaction(self, txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources , signup_time, purchase_time, purchase_value, source, ip_address):
+    def process_transaction(self, txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count, signup_time, purchase_time, purchase_value, source, ip_address):
         """
         Process single transaction and return a dictionary of the processed transaction with predictions.
         """
-        txn_count, device_ip_consistency, device_source_consistency, time_setup_to_txn_seconds, time_since_last_device_id_txn, purchase_deviation_from_device_mean, device_lifespan = compute_features(txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources , signup_time, purchase_time, purchase_value, source, ip_address)
+        txn_count, device_ip_consistency, device_source_consistency, time_setup_to_txn_seconds, time_since_last_device_id_txn, purchase_deviation_from_device_mean, device_lifespan, device_fraud_rate = compute_features(txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count, signup_time, purchase_time, purchase_value, source, ip_address)
         processed_transaction = {
             "txn_count": txn_count,
             "device_ip_consistency": device_ip_consistency,
@@ -114,7 +159,8 @@ class InferenceConsumer:
             "time_setup_to_txn_seconds": time_setup_to_txn_seconds,
             "time_since_last_device_txn": time_since_last_device_id_txn,
             "purchase_deviation_from_device_mean": purchase_deviation_from_device_mean,
-            "device_lifespan": device_lifespan
+            "device_lifespan": device_lifespan,
+            "device_fraud_rate": device_fraud_rate
         }
         processed_transaction_df = pd.DataFrame([processed_transaction])
         processed_transaction_df = self.preprocessor.transform(processed_transaction_df)
@@ -124,10 +170,35 @@ class InferenceConsumer:
         return processed_transaction
 
     
-    def store_result(self, transaction_id, processed_transaction):
-        self.client.xadd(
-            RESULT_STREAM,
-            serialize_processed_transaction(transaction_id, processed_transaction)
+    def store_result(self, transaction_id, device_id, processed_transaction):
+        """
+        Store prediction results:
+        1. Append immutable prediction event to RESULT_STREAM
+        2. Persist mutable prediction record in Redis hash (for label join & evaluation)
+        """
+
+        processed_transaction_dict = serialize_processed_transaction(transaction_id, processed_transaction)
+        
+        # append immutable prediction event to RESULT_STREAM
+        self.client.xadd(RESULT_STREAM, processed_transaction_dict)
+
+        # persist mutable prediction record in Redis hash
+        self.client.hset(
+            f"prediction:{transaction_id}",
+            mapping={
+                "transaction_id": processed_transaction_dict["transaction_id"],
+                "device_id": device_id,
+                "predicted_class": processed_transaction_dict["predicted_class"],
+                "fraud_probability": processed_transaction_dict["fraud_probability"],
+                "device_ip_consistency": processed_transaction_dict["device_ip_consistency"],
+                "device_source_consistency": processed_transaction_dict["device_source_consistency"],
+                "time_setup_to_txn_seconds": processed_transaction_dict["time_setup_to_txn_seconds"],
+                "time_since_last_device_txn": processed_transaction_dict["time_since_last_device_txn"],
+                "purchase_deviation_from_device_mean": processed_transaction_dict["purchase_deviation_from_device_mean"],
+                "device_lifespan": processed_transaction_dict["device_lifespan"],
+                "device_fraud_rate": processed_transaction_dict["device_fraud_rate"],
+                "true_label": ""  # initially empty, updated later when label arrives
+            }
         )
 
 

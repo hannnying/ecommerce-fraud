@@ -43,14 +43,14 @@ async def get_result(
     redis_client: Redis = Depends(get_redis_client)
 ):
     """
-    Poll Redis RESULT_STREAM for trznsaction results.
+    Poll Redis RESULT_STREAM for transaction results.
     """
     try:
         messages = redis_client.xrevrange(RESULT_STREAM, count=100)
         print(f"messages received: {messages}")
         for message_id, data in messages:
             return {
-                "test": data[:]
+                "test": data
             }
         
         raise HTTPException(status_code=202, detail="still processing")
@@ -70,18 +70,12 @@ async def get_result(
     Returns the first matching result or status "pending".
     """
     try:
-        messages = redis_client.xrevrange(RESULT_STREAM, count=100)
-        print(f"messages received: {messages}")
-        for message_id, data in messages:
-            if data.get("transaction_id") == transaction_id:
-                return {
-                    "transaction_id": transaction_id,
-                    "predicted_class": int(data["predicted_class"]),
-                    "fraud_probability": float(data["fraud_probability"])
-                }
+        prediction_key = f"prediction:{transaction_id}"
+        prediction_record = redis_client.hgetall(prediction_key)
+        return {
+            "test": prediction_record
+        }
         
-        raise HTTPException(status_code=202, detail="still processing")
-    
     except HTTPException:
         raise
     except Exception as e:
