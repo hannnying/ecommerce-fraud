@@ -29,6 +29,7 @@ class DeviceState:
             first_seen = stats["first_seen"]
             ip_addresses = stats["ip_addresses"]
             sources = stats["sources"]
+            fraud_count = stats["fraud_count"]
 
             self.client.hset(
                 f"device:{device_id}",
@@ -38,7 +39,8 @@ class DeviceState:
                     last_transaction,
                     first_seen,
                     ip_addresses,
-                    sources
+                    sources,
+                    fraud_count
                 )
             )
 
@@ -52,12 +54,28 @@ class DeviceState:
             "last_transaction",
             "first_seen",
             "ip_addresses",
-            "sources"
+            "sources",
+            "fraud_count"
         )
 
         return deserialize_raw_state(raw)
 
-    def update_device_state(self, device_id, txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, signup_time, purchase_time, purchase_value, source, ip_address):
+    def update_device_state(
+            self,
+            device_id,
+            txn_count,
+            purchase_sum,
+            last_transaction,
+            first_seen,
+            ip_addresses,
+            sources,
+            fraud_count,
+            signup_time,
+            purchase_time,
+            purchase_value,
+            source,
+            ip_address
+    ):
         """Update device state."""
 
 
@@ -72,7 +90,8 @@ class DeviceState:
             "last_transaction": purchase_time,
             "first_seen": purchase_time if not first_seen else first_seen,
             "ip_addresses": ip_addresses,
-            "sources": sources
+            "sources": sources,
+            "fraud_count": fraud_count # updated when labels arrive 
         }
 
         self.client.hset(
@@ -83,6 +102,7 @@ class DeviceState:
                 updated_state["last_transaction"],
                 updated_state["first_seen"],
                 updated_state["ip_addresses"],
-                updated_state["sources"]
+                updated_state["sources"],
+                updated_state["fraud_count"]
             )
         )

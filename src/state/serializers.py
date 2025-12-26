@@ -9,8 +9,9 @@ def deserialize_raw_state(raw):
     first_seen = datetime.fromisoformat(raw[3]) if raw[3] else None
     ip_addresses = set(json.loads(raw[4])) if raw[4] else set()
     sources = set(json.loads(raw[5])) if raw[5] else set()
+    fraud_count = int(raw[6]) if raw[6] else 0
 
-    return txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources
+    return txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count
 
 
 def deserialize_transaction(transaction):
@@ -39,12 +40,13 @@ def serialize_processed_transaction(transaction_id, processed_transaction):
         "time_since_last_device_txn": int(processed_transaction["time_since_last_device_txn"]),
         "purchase_deviation_from_device_mean": float(processed_transaction["purchase_deviation_from_device_mean"]),
         "device_lifespan": int(processed_transaction["device_lifespan"]),
+        "device_fraud_rate": float(processed_transaction["device_fraud_rate"]),
         "predicted_class": processed_transaction["predicted_class"],
         "fraud_probability": processed_transaction["fraud_probability"]
     }
 
 
-def serialize_state(txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources):
+def serialize_state(txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count):
     if type(last_transaction) != str:
         last_transaction = last_transaction.isoformat()
 
@@ -57,7 +59,8 @@ def serialize_state(txn_count, purchase_sum, last_transaction, first_seen, ip_ad
         "last_transaction": last_transaction,
         "first_seen": first_seen,
         "ip_addresss": json.dumps(list(ip_addresses)),
-        "sources": json.dumps(list(sources))
+        "sources": json.dumps(list(sources)),
+        "fraud_count": fraud_count
     }
     
 

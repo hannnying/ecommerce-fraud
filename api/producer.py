@@ -6,6 +6,7 @@ import json
 import time
 from datetime import datetime, timedelta
 from src.config import (
+    LABELS_STREAM,
     RAW_DATA_PATH,
     REDIS_DB,
     REDIS_HOST,
@@ -36,7 +37,7 @@ class TransactionProducer:
                 transaction_dict = serialize_transaction(transaction_id, row)
                 self.client.xadd(TRANSACTION_STREAM, transaction_dict)
 
-                self.schedule_label(transaction_id, row["purchase_time"], row["is_fraud"])
+                self.schedule_label(transaction_id, row["device_id"], row["purchase_time"], row["is_fraud"])
 
                 time.sleep(1.0 / self.tps)
 
@@ -47,20 +48,18 @@ class TransactionProducer:
 
         return transaction_ids
 
-    def schedule_label(self, transaction_id: str, purchase_time: str, is_fraud: np.int64):
+    def schedule_label(self, transaction_id: str, device_id: str, purchase_time: str, is_fraud: np.int64):
         """
         Simulate label arriving after delay.
         Store in Redis sorted set for delayed processing.
         """
-        delay_days = random.randint(1, 7)
+        delay_days = 0 # due to the nature of the dataset, it seems that many fraud take place one after another
         arrival_time = datetime.fromisoformat(purchase_time) + timedelta(days=delay_days)
+        label_dict = {
+            "transaction_id": transaction_id,
+            "device_id": device_id,
+            "is_fraud": int(is_fraud),
+            "arrival_time": arrival_time.isoformat()
+        }
 
-        self.client.zadd(
-            "pending_labels",
-            {
-                json.dumps({
-                    "transaction_id": transaction_id,
-                    "label": int(is_fraud)
-                }): arrival_time.timestamp()
-            }
-        )
+        self.client.xadd(LABELS_STREAM, label_dict)
