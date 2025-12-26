@@ -81,7 +81,7 @@ pip install -r requirements.txt
 Before running the app, you need to train the Logistic Regression model.
 Run:
 ```bash
-python3 -m training.train.py \
+python3 -m training.train_v2.py \
     --model logistic_regression \
     --resampling random_undersampling \
     --save

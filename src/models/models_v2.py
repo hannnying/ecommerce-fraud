@@ -3,6 +3,7 @@ from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import EditedNearestNeighbours, RandomUnderSampler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
 from xgboost import XGBClassifier
 from sklearn.model_selection import GridSearchCV
 import joblib
@@ -60,7 +61,12 @@ class FraudDetectionModel:
             if self.params:
                 self.model = LogisticRegression(**self.params)
             else:
-                self.model = LogisticRegression()      
+                self.model = LogisticRegression()     
+        elif self.model_type == 'svc':
+            if self.params:
+                 self.model = SVC(**self.params)
+            else:
+                self.model = SVC()
         elif self.model_type == 'random_forest':
             if self.params:
                 self.model = RandomForestClassifier(**self.params)
@@ -90,6 +96,7 @@ class FraudDetectionModel:
         """
 
         X_train_resampled, y_train_resampled = self.resampler.fit_resample(X_train, y_train)
+        print(f"Resampling resulted in: {len(X_train_resampled)}")
         self.model.fit(X_train_resampled, y_train_resampled)
 
         # Extract feature importance
@@ -224,6 +231,8 @@ class FraudModelTuner:
         )
 
         X_resampled, y_resampled = base_model.resampler.fit_resample(X_train, y_train)
+
+        print(f"Resampling resulted in: {len(X_resampled)}")
 
         grid_search = GridSearchCV(
             estimator=base_model.model,

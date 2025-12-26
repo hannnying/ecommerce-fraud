@@ -39,6 +39,12 @@ class InitialTrain:
                 "max_iter": [500, 1000],
                 "random_state": [42],
             }
+
+        if self.model_type == "svc":
+            self.param_grid = {
+                "C": [1],
+                "kernel": ["linear", "poly"]
+            }
         
 
     def compute_features(self, row):
@@ -56,6 +62,7 @@ class InitialTrain:
             time_since_last_device_txn = (row["purchase_time"] - device_stats["last_transaction"]).total_seconds()
             purchase_deviation_from_device_mean = abs(row["purchase_value"] - device_stats["purchase_sum"] / txn_count)
             device_lifespan = (row["purchase_time"] - device_stats["first_seen"]).total_seconds()
+            fraud_rate = device_stats["fraud_count"] / txn_count 
 
         else:
             txn_count = 1
@@ -64,6 +71,7 @@ class InitialTrain:
             time_since_last_device_txn = 99999
             purchase_deviation_from_device_mean = 0
             device_lifespan = 0
+            fraud_rate = 0
         
         processed_transaction = {
             "txn_count": txn_count,
@@ -73,6 +81,7 @@ class InitialTrain:
             "time_since_last_device_txn": time_since_last_device_txn, 
             "purchase_deviation_from_device_mean": purchase_deviation_from_device_mean,
             "device_lifespan": device_lifespan,
+            "device_fraud_rate": fraud_rate,
             "is_fraud": row["is_fraud"] # may not put it here
         }
 
@@ -80,6 +89,7 @@ class InitialTrain:
     
     def update_device_state(self, row):
         device_id = row["device_id"]
+
         if device_id in self.device_state:
             device_stats = self.device_state[device_id]
             
@@ -89,6 +99,10 @@ class InitialTrain:
             device_stats["last_transaction"] = row["purchase_time"]
             device_stats["purchase_sum"] += row["purchase_value"]
 
+            if row["is_fraud"]:
+                device_stats["fraud_count"] += 1
+            
+
         else:
             self.device_state[device_id] = {
                     "txn_count": 1,
@@ -96,7 +110,8 @@ class InitialTrain:
                     "sources": {row["source"]},
                     "last_transaction": row["purchase_time"],
                     "purchase_sum": row["purchase_value"],
-                    "first_seen": row["purchase_time"]
+                    "first_seen": row["purchase_time"],
+                    "fraud_count": 1 if row["is_fraud"] else 0
                 }
     
     def fit_preprocessor_model(self, df_train, df_test, params=None):
@@ -106,6 +121,8 @@ class InitialTrain:
         X_train = preprocessor.fit_transform(X_train)
         X_test, y_test = df_test.drop(columns=[TARGET_COL]), df_test[TARGET_COL]
         X_test = preprocessor.transform(X_test) 
+
+        print(f"Train: {len(X_train)}, Test: {len(X_test)}")
 
         if not params: # tune mode
             model_tuner = FraudModelTuner(
@@ -126,11 +143,12 @@ class InitialTrain:
             )
             model.fit(X_train, y_train)
             y_pred = model.predict(X_test)
+        
             print(classification_report(y_test, y_pred))
             return preprocessor, model
 
 
-    def train_pipeline(self):
+    def train_pipeline(self, initial_rows=50000, train_percentage=0.8):
         df = pd.read_csv(RAW_DATA_PATH)
         df["signup_time"] = pd.to_datetime(df["signup_time"])
         df["purchase_time"] = pd.to_datetime(df["purchase_time"])
@@ -143,13 +161,16 @@ class InitialTrain:
 
         processed_transactions = pd.DataFrame(self.processed_transactions)
 
-        train = processed_transactions[:40000]
-        val = processed_transactions[40000:45000]
-        test = processed_transactions[45000:50000]
+        initial_training_rows = int(train_percentage * initial_rows)
+        test_val_rows = int((1 - train_percentage) * initial_rows / 2)
+
+        train = processed_transactions[:initial_training_rows]
+        val = processed_transactions[initial_training_rows:initial_training_rows + test_val_rows]
+        test = processed_transactions[initial_training_rows + test_val_rows:initial_rows]
 
         _, grid_search = self.fit_preprocessor_model(train, val)
 
-        new_train = pd.concat([train, test])
+        new_train = pd.concat([train, val])
         preprocessor, model = self.fit_preprocessor_model(new_train, test, grid_search.best_params_)
 
         return preprocessor, model
