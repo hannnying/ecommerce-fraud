@@ -83,7 +83,7 @@ class InferenceConsumer:
             source,
             ip_address,
         )
-        print(f"processed transaction: {transaction_id}, {processed_transaction}")
+        print(f"processed transaction: {transaction_id}")
 
         # add processed transaction df to results stream
         self.store_result(transaction_id, device_id, processed_transaction)
@@ -107,46 +107,40 @@ class InferenceConsumer:
         if is_fraud:
             self.client.hincrby(device_key, "fraud_count", 1)
         
-
+        print(f"processed label: {transaction_id}")
 
     def start_consuming(self):
         """
-        Consume transactions from Redis stream and make predictions.
+        Consume transactions and labels from separate Redis streams and process them in real-time.
         """
-
         last_txn_id = "0-0"
         last_label_id = "0-0"
-
         while True:
             messages = self.client.xread(
                 streams={
-                     TRANSACTION_STREAM: last_txn_id,
-                     LABELS_STREAM: last_label_id
-                }, 
-                block=5000
+                    TRANSACTION_STREAM: last_txn_id,
+                    LABELS_STREAM: last_label_id
+                },
+                count=1,
+                block=1
             )
 
             if not messages:
                 continue
 
-            _, entries = messages
-
+            # messages is a list of (stream_name, entries)
             for stream_name, entries in messages:
-                print(f"stream name: {stream_name}")
                 if stream_name == TRANSACTION_STREAM:
-                    last_txn_id = entries[-1][0]
-
-                    for _, transaction_dict in entries:
+                    for message_id, transaction_dict in entries:
                         self.handle_transaction(transaction_dict)
+                        last_txn_id = message_id
 
                 elif stream_name == LABELS_STREAM:
-                    print(entries)
-                    last_label_id = entries[-1][0]
-
-                    for _, label_dict in entries:
+                    for message_id, label_dict in entries:
                         self.handle_label(label_dict)
+                        last_label_id = message_id
 
-            
+
     def process_transaction(self, txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count, signup_time, purchase_time, purchase_value, source, ip_address):
         """
         Process single transaction and return a dictionary of the processed transaction with predictions.
@@ -190,6 +184,7 @@ class InferenceConsumer:
                 "device_id": device_id,
                 "predicted_class": processed_transaction_dict["predicted_class"],
                 "fraud_probability": processed_transaction_dict["fraud_probability"],
+                "txn_count": processed_transaction_dict["txn_count"],
                 "device_ip_consistency": processed_transaction_dict["device_ip_consistency"],
                 "device_source_consistency": processed_transaction_dict["device_source_consistency"],
                 "time_setup_to_txn_seconds": processed_transaction_dict["time_setup_to_txn_seconds"],
