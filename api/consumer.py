@@ -19,7 +19,8 @@ from src.config import (
 )
 from src.feature_engineering.engineer import compute_features
 from src.state.redis_store import (
-    DeviceState
+    DeviceState,
+    PredictionStore
 )
 from src.state.serializers import (
     deserialize_transaction,
@@ -33,6 +34,7 @@ class InferenceConsumer:
         self.model = None
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
         self.device_state = DeviceState()
+        self.prediction_store = PredictionStore()
 
         self._initialize_preprocessor_model(preprocessor_path, model_path)
 
@@ -96,16 +98,12 @@ class InferenceConsumer:
         
         transaction_id = label_dict["transaction_id"]
         device_id = label_dict["device_id"]
-        prediction_key = f"prediction:{transaction_id}"
-        device_key = f"device:{device_id}"
-        is_fraud = int(label_dict["is_fraud"])
+        is_fraud = label_dict["is_fraud"]
 
-        # look for prediction with prediction_key in hash
-        self.client.hset(prediction_key, "true_label", is_fraud)
+        self.prediction_store.update_label(transaction_id, is_fraud)
 
         # look for device record with device_id in hash
-        if is_fraud:
-            self.client.hincrby(device_key, "fraud_count", 1)
+        self.device_state.update_device_state(device_id, is_fraud)
         
         print(f"processed label: {transaction_id}")
 
@@ -177,25 +175,9 @@ class InferenceConsumer:
         self.client.xadd(RESULT_STREAM, processed_transaction_dict)
 
         # persist mutable prediction record in Redis hash
-        self.client.hset(
-            f"prediction:{transaction_id}",
-            mapping={
-                "transaction_id": processed_transaction_dict["transaction_id"],
-                "device_id": device_id,
-                "predicted_class": processed_transaction_dict["predicted_class"],
-                "fraud_probability": processed_transaction_dict["fraud_probability"],
-                "txn_count": processed_transaction_dict["txn_count"],
-                "device_ip_consistency": processed_transaction_dict["device_ip_consistency"],
-                "device_source_consistency": processed_transaction_dict["device_source_consistency"],
-                "time_setup_to_txn_seconds": processed_transaction_dict["time_setup_to_txn_seconds"],
-                "time_since_last_device_txn": processed_transaction_dict["time_since_last_device_txn"],
-                "purchase_deviation_from_device_mean": processed_transaction_dict["purchase_deviation_from_device_mean"],
-                "device_lifespan": processed_transaction_dict["device_lifespan"],
-                "device_fraud_rate": processed_transaction_dict["device_fraud_rate"],
-                "true_label": ""  # initially empty, updated later when label arrives
-            }
-        )
+        self.prediction_store.update_predictions(transaction_id, device_id, processed_transaction_dict)
 
+        
 
 if __name__=="__main__":
     inference_consumer = InferenceConsumer()

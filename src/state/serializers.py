@@ -41,8 +41,8 @@ def serialize_processed_transaction(transaction_id, processed_transaction):
         "purchase_deviation_from_device_mean": float(processed_transaction["purchase_deviation_from_device_mean"]),
         "device_lifespan": int(processed_transaction["device_lifespan"]),
         "device_fraud_rate": float(processed_transaction["device_fraud_rate"]),
-        "predicted_class": processed_transaction["predicted_class"],
-        "fraud_probability": processed_transaction["fraud_probability"]
+        "predicted_class": int(processed_transaction["predicted_class"]),
+        "fraud_probability": float(processed_transaction["fraud_probability"])
     }
 
 

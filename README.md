@@ -78,12 +78,21 @@ pip install -r requirements.txt
 
 # Usage
 
+
+## Run the Application Locally
+
+### Step 1: Start Redis 
+Start Redis Using Docker:
+```bash
+docker run --name fraud-redis  -p 6379:6379 -d redis:latest
+```
+
+### Step 2: Train model
 Before running the app, you need to train the Logistic Regression model.
 Run:
 ```bash
-python3 -m training.train_v2.py \
+python3 -m training.train_v2 \
     --model logistic_regression \
-    --resampling random_undersampling \
     --save
 ```
 
@@ -105,21 +114,13 @@ This script performs initial offline training of the fraud detection model:
    - `models/logistic_regression_model.pkl`
 ```
 
-## Run the Application Locally
-
-### Step 1: Start Redis 
-Start Redis Using Docker:
-```bash
-docker run --name fraud-redis  -p 6379:6379 -d redis:latest
-```
-
-### Step 2: Start FastAPI Backend
+### Step 3: Start FastAPI Backend
 Run FastAPI server in a separate terminal:
 ```bash
 uvicorn api.main:app --reload
 ```
 
-### Step 3: Start worker
+### Step 4: Start worker
 Run the worker process in another terminal:
 ```bash
 python3 -m api.consumer

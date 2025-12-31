@@ -13,13 +13,17 @@ from src.config import (
 )
 from src.models.models_v2 import FraudDetectionModel, FraudModelTuner
 from src.preprocessing import FraudDataPreprocessor
-from src.state.redis_store import DeviceState
+from src.state.redis_store import (
+    DeviceState,
+    PredictionStore
+)
 from sklearn.metrics import classification_report
 
 class InitialTrain:
 
     def __init__(self, resampling_type="smote", model_type="logistic_regression"):
         self.device_state = {}
+        self.prediction_store = PredictionStore()
         self.processed_transactions = []
         self.param_grid = None
         self.resampling_type = resampling_type
@@ -66,8 +70,8 @@ class InitialTrain:
 
         else:
             txn_count = 1
-            device_ip_consistency = 1
-            device_source_consistency = 1
+            device_ip_consistency = True
+            device_source_consistency = True
             time_since_last_device_txn = 99999
             purchase_deviation_from_device_mean = 0
             device_lifespan = 0
@@ -82,12 +86,12 @@ class InitialTrain:
             "purchase_deviation_from_device_mean": purchase_deviation_from_device_mean,
             "device_lifespan": device_lifespan,
             "device_fraud_rate": fraud_rate,
-            "is_fraud": row["is_fraud"] # may not put it here
         }
 
         return processed_transaction
     
     def update_device_state(self, row):
+        """When pipeline is run on unseen data, fraud_count does not get updated"""
         device_id = row["device_id"]
 
         if device_id in self.device_state:
@@ -99,7 +103,7 @@ class InitialTrain:
             device_stats["last_transaction"] = row["purchase_time"]
             device_stats["purchase_sum"] += row["purchase_value"]
 
-            if row["is_fraud"]:
+            if "is_fraud" in row and row["is_fraud"]:
                 device_stats["fraud_count"] += 1
             
 
@@ -111,18 +115,62 @@ class InitialTrain:
                     "last_transaction": row["purchase_time"],
                     "purchase_sum": row["purchase_value"],
                     "first_seen": row["purchase_time"],
-                    "fraud_count": 1 if row["is_fraud"] else 0
                 }
-    
-    def fit_preprocessor_model(self, df_train, df_test, params=None):
-        preprocessor = FraudDataPreprocessor()
-        # fit preprocessor
-        X_train, y_train = df_train.drop(columns=[TARGET_COL]), df_train[TARGET_COL] 
-        X_train = preprocessor.fit_transform(X_train)
-        X_test, y_test = df_test.drop(columns=[TARGET_COL]), df_test[TARGET_COL]
-        X_test = preprocessor.transform(X_test) 
+            
+            if "is_fraud" in row:
+                self.device_state[device_id]["fraud_count"] = 1 if row["is_fraud"] else 0
+            else: # on unseen devices in unseend data
+                self.device_state[device_id]["fraud_count"] = 0
 
-        print(f"Train: {len(X_train)}, Test: {len(X_test)}")
+    
+
+    def update_unseen_fraud_count(df):
+        """Update device fraud count after model inference, for future inference"""
+    
+
+    def fit_preprocessor_model(self, df_train, params=None, transform=True):
+        """
+        Perform offline feature computation, fit a preprocessing pipeline, and train a fraud detection model.
+
+        This method simulates historical transaction processing by iterating through the training data
+        in chronological order, computing transaction-level features and updating device-level state
+        after each transaction. The resulting feature set is then used to fit a preprocessing pipeline
+        (e.g. scaling and encoding) and train a fraud detection model.
+
+        If no model parameters are provided, hyperparameter tuning is performed via grid search and
+        the best-performing model is selected. Otherwise, a model is trained directly using the
+        provided parameters.
+
+        Parameters
+        ----------
+        df_train : pd.DataFrame
+            Historical transaction data used for offline training. Must contain all fields required
+            for feature computation and the target column.
+        params : dict, optional
+            Custom model parameters. If None, grid search is performed to find the best parameters.
+
+        Returns
+        -------
+        preprocessor : FraudDataPreprocessor
+            Fitted preprocessing pipeline used to transform feature data.
+        model: FraudDetectionModel
+            Trained fraud detection model if `params` is provided, otherwise trained fraud detection model with best
+            hyperparameters from grid search.
+        """
+        processed_train = []
+        X_train, y_train = df_train.drop(columns=[TARGET_COL]), df_train[TARGET_COL] 
+
+        for idx, row in X_train.iterrows():
+            processed_transaction = self.compute_features(row)
+            self.update_device_state(row)
+            processed_train.append(processed_transaction)
+
+        processed_train_df = pd.DataFrame(processed_train)
+
+        preprocessor = FraudDataPreprocessor()
+
+        # fit preprocessor
+        X_train = preprocessor.fit_transform(processed_train_df)
 
         if not params: # tune mode
             model_tuner = FraudModelTuner(
@@ -130,10 +178,7 @@ class InitialTrain:
                 model_type=self.model_type
             )
             model, grid_search = model_tuner.tune(X_train, y_train, self.param_grid)
-            y_pred = model.predict(X_test)
-            print(classification_report(y_test, y_pred))
-            return preprocessor, grid_search
-            
+            model.fit(X_train, y_train)
 
         else:
             model = FraudDetectionModel(
@@ -142,38 +187,128 @@ class InitialTrain:
                 custom_params=params
             )
             model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
+
+        if transform:
+            y_pred = model.predict(X_train)
+            y_proba = model.predict_proba(X_train)[:, 1]
+
+            return preprocessor, model, processed_train, y_train, y_pred, y_proba
         
-            print(classification_report(y_test, y_pred))
+        else:
             return preprocessor, model
+        
+        
+    def process_transactions(self, preprocessor, model, X, y=None, update_device_state=True): 
+        """
+        Transform raw transaction events into model-ready features and generate fraud predictions.
+
+        This method performs stateful, time-ordered feature computation using device history,
+        applies a fitted preprocessing pipeline, and runs inference with a trained model.
+
+        It is designed to be used for both offline (training / evaluation) and online
+        (inference / streaming) workflows.
+
+        Parameters
+        ----------
+        preprocessor : FraudDataPreprocessor
+            A fitted preprocessing pipeline (scaling, encoding).
+        model : FraudDetectionModel
+            A trained fraud detection model.
+        X : pd.DataFrame
+            
+        update_training_state : bool, default=True
+            Whether to update device state after each transaction.
+            - True  → if running inference on unseen data.
+            - False → if running inference on data that the model was trained on.
+
+        Returns
+        -------
+        processed_inference_df: pd.DataFrame
+            Preprocessed feature matrix used before scaling and encoding
+        y_true : pd.Series or None
+            Ground truth labels if present in the input data, otherwise None.
+        y_pred : np.ndarray
+            Predicted fraud class labels.
+        y_proba : np.ndarray
+            Predicted fraud probabilities.
+        
+        Notes
+        -----
+        - Feature computation only uses information available at or before each transaction.
+        - True labels are never used during feature computation.
+        - Device state updates triggered by labels must be handled separately.
+        """
+
+        processed_inference = []
+
+        for idx, row in X.iterrows():
+            processed_transaction = self.compute_features(row)
+
+            # device fraud_count freezes when runnign inference on unseen data
+            if update_device_state: 
+                self.update_device_state(row)
+
+            processed_inference.append(processed_transaction)
+        
+        processed_inference_df = pd.DataFrame(processed_inference)
+        X = preprocessor.transform(processed_inference_df)
+
+        y_pred = model.predict(X)
+        y_proba = model.predict_proba(X)[:,1]
+
+        return processed_inference, y_pred, y_proba
+    
+    def update_prediction_hash(self, y_pred, y_val):
+        pass
 
 
     def train_pipeline(self, initial_rows=50000, train_percentage=0.8):
+        preprocessor = FraudDataPreprocessor()
         df = pd.read_csv(RAW_DATA_PATH)
         df["signup_time"] = pd.to_datetime(df["signup_time"])
         df["purchase_time"] = pd.to_datetime(df["purchase_time"])
         df = df.sort_values(by="purchase_time")
 
-        for idx, row in df.iterrows():
-            processed_transaction = self.compute_features(row)
-            self.update_device_state(row)
-            self.processed_transactions.append(processed_transaction)
-
-        processed_transactions = pd.DataFrame(self.processed_transactions)
-
         initial_training_rows = int(train_percentage * initial_rows)
-        test_val_rows = int((1 - train_percentage) * initial_rows / 2)
 
-        train = processed_transactions[:initial_training_rows]
-        val = processed_transactions[initial_training_rows:initial_training_rows + test_val_rows]
-        test = processed_transactions[initial_training_rows + test_val_rows:initial_rows]
+        train = df[:initial_training_rows]
+        train.reset_index(inplace=True)
+        test = df[initial_training_rows:initial_rows+1]
+        test.reset_index(inplace=True)
 
-        _, grid_search = self.fit_preprocessor_model(train, val)
+        # initial fitting to find the best hyperparameters with train set
+        preprocessor, model, X_train_features, y_train, y_train_pred, y_train_proba = self.fit_preprocessor_model(
+            train, params=None, transform=True
+        )
 
-        new_train = pd.concat([train, val])
-        preprocessor, model = self.fit_preprocessor_model(new_train, test, grid_search.best_params_)
+        # store train predictions in prediction hash (where true labels are known too)
+        self.prediction_store.batch_update_predictions(
+            X_train_features, train["device_id"], y_train_pred, y_train_proba, y_train
+        )
 
+        # split test into X and y
+        X_test, y_test = test.drop(columns=[TARGET_COL]), test[TARGET_COL]
+
+        # validate performance on validation set
+        X_test_features, y_test_pred, y_test_proba = self.process_transactions(preprocessor, model, X_test)
+
+        print(classification_report(y_true=y_test, y_pred=y_test_pred))
+
+        # store predictions in prediction hash 
+        self.prediction_store.batch_update_predictions(
+            X_test_features, test["device_id"], y_test_pred, y_test_proba, y_test
+        )
+
+        # load initial redis hash (fraud count not updated)
+        redis_device_state = DeviceState()
+        redis_device_state.load_initial(self.device_state)
+
+        # update fraud_count
+        for idx, is_fraud in enumerate(y_test):
+            redis_device_state.update_fraud_count(test["device_id"][idx], is_fraud)
+    
         return preprocessor, model
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -214,13 +349,6 @@ def main():
         with open(MODEL_PATH, "wb") as m:
             pickle.dump(model, m)
             print(f"model saved at: {MODEL_PATH}")
-
-    # add device_state to redis
-    redis_device_state = DeviceState()
-    redis_device_state.load_initial(initial_train.device_state)
-    print(redis_device_state.get_device_state('KNENGMCLZOFYB'))
-
-    # add transactions, their predictions, whether they were used in training into database
 
 
 if __name__=="__main__":

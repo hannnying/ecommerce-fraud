@@ -1,5 +1,6 @@
 import datetime
 import json
+from typing import Dict, List
 from redis import Redis
 from src.config import(
    REDIS_DB,
@@ -9,9 +10,11 @@ from src.config import(
 from src.state.serializers import (
     deserialize_raw_state,
     deserialize_transaction,
+    serialize_processed_transaction,
     serialize_state,
     serialize_transaction
 )
+from uuid import uuid4
 
 
 class DeviceState:
@@ -106,3 +109,63 @@ class DeviceState:
                 updated_state["fraud_count"]
             )
         )
+
+    def update_fraud_count(self, device_id, is_fraud):
+        device_key = f"device:{device_id}"
+
+        if is_fraud:
+            self.client.hincrby(device_key, "fraud_count", 1)
+
+
+class PredictionStore:
+    
+    def __init__(self):
+        self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
+
+    def batch_update_predictions(self, X: List[Dict], device_ids, y_pred, y_proba, y=None):
+        print(device_ids)
+        i = 0
+        for idx, processed_transaction in enumerate(X):
+            transaction_id = str(uuid4())
+            device_id = device_ids[idx]
+            predicted_class = y_pred[idx]
+            fraud_probability = y_proba[idx]
+
+            processed_transaction["transaction_id"] = transaction_id
+            processed_transaction["predicted_class"] = predicted_class
+            processed_transaction["fraud_probability"] = fraud_probability
+            processed_transaction_dict = serialize_processed_transaction(transaction_id, processed_transaction)
+
+            if i == 0: 
+                print(processed_transaction_dict)
+                print(device_id)
+                i+=1
+        
+            self.update_predictions(transaction_id, device_id, processed_transaction_dict)
+            
+            if y is not None:
+                self.update_label(transaction_id, y[idx])
+    
+    def update_predictions(self, transaction_id, device_id, processed_transaction_dict): # processed_transaction_dict values are already seriaized
+        self.client.hset(
+            f"prediction:{transaction_id}",
+            mapping={
+                "transaction_id": processed_transaction_dict["transaction_id"],
+                "device_id": device_id,
+                "predicted_class": processed_transaction_dict["predicted_class"],
+                "fraud_probability": processed_transaction_dict["fraud_probability"],
+                "txn_count": processed_transaction_dict["txn_count"],
+                "device_ip_consistency": processed_transaction_dict["device_ip_consistency"],
+                "device_source_consistency": processed_transaction_dict["device_source_consistency"],
+                "time_setup_to_txn_seconds": processed_transaction_dict["time_setup_to_txn_seconds"],
+                "time_since_last_device_txn": processed_transaction_dict["time_since_last_device_txn"],
+                "purchase_deviation_from_device_mean": processed_transaction_dict["purchase_deviation_from_device_mean"],
+                "device_lifespan": processed_transaction_dict["device_lifespan"],
+                "device_fraud_rate": processed_transaction_dict["device_fraud_rate"],
+                "true_label": ""  # initially empty, updated later when label arrives
+            }
+        )
+
+    def update_label(self, transaction_id, is_fraud):
+        prediction_key = f"prediction:{transaction_id}"
+        self.client.hset(prediction_key, "true_label", int(is_fraud))
