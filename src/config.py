@@ -81,7 +81,9 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
+DEVICE_STATE_HASH = "device_state_hash"
 TRANSACTION_STREAM = "transactions_stream"
+LABELS_STREAM = "labels_stream"
 RESULT_STREAM = "results_stream"
 
 REDIS_BLOCK_TIMEOUT = int(os.getenv("REDIS_BLOCK_TIMEOUT", 5000)) # milliseconds
