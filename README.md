@@ -87,7 +87,7 @@ Start Redis Using Docker:
 docker run --name fraud-redis  -p 6379:6379 -d redis:latest
 ```
 
-### Step 2: Train model
+### Step 2: Train model (also ensures that device_state is updated for model inference)
 Before running the app, you need to train the Logistic Regression model.
 Run:
 ```bash
@@ -114,16 +114,24 @@ This script performs initial offline training of the fraud detection model:
    - `models/logistic_regression_model.pkl`
 ```
 
-### Step 3: Start FastAPI Backend
+
+### Step 3: Start worker
+Run the worker process in another terminal:
+```bash
+python3 -m api.consumer
+```
+
+### Step 4: Start FastAPI Backend
 Run FastAPI server in a separate terminal:
 ```bash
 uvicorn api.main:app --reload
 ```
 
-### Step 4: Start worker
-Run the worker process in another terminal:
+
+### Step 5: Start Streamlit UI
+Run Streamlit server in a separate terminal:
 ```bash
-python3 -m api.consumer
+streamlit run app.py
 ```
 
 ## FastAPI Endpoints
