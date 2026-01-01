@@ -38,27 +38,32 @@ async def stream():
         return {"status": f"An error occurred: {e}"}
 
     
-@app.get("/result")
-async def get_result(
+@app.get("/results/recent")
+async def get_k_results(
+    k: int = 20,
     redis_client: Redis = Depends(get_redis_client)
 ):
     """
-    Poll Redis RESULT_STREAM for transaction results.
+    Poll Redis RESULT_STREAM for the most recent k processed transactions from RESULT_STREAM.
     """
     try:
-        messages = redis_client.xrevrange(RESULT_STREAM, count=100)
-        print(f"messages received: {messages}")
-        for message_id, data in messages:
-            return {
-                "test": data
-            }
-        
-        raise HTTPException(status_code=202, detail="still processing")
-    
-    except HTTPException:
-        raise
+        entries = redis_client.xrevrange(RESULT_STREAM, count=k)
+
+        results = []
+        for stream_id, data in reversed(entries):
+            results.append({
+                "stream_id": stream_id,
+                **data
+            })
+
+        return {
+            "count": len(results),
+            "results": results
+        }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
 
 @app.get("/result/{transaction_id}")
 async def get_result(

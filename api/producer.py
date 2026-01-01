@@ -29,7 +29,7 @@ class TransactionProducer:
     def start_streaming(self):
         """Simulate real-time transactions arriving and return their ids."""
         transaction_ids = []
-        for idx in range(self.start_idx, self.start_idx+5):
+        for idx in range(self.start_idx, self.start_idx+100):
             row = self.df.iloc[idx]
 
             try:

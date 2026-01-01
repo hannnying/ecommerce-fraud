@@ -103,7 +103,7 @@ class InferenceConsumer:
         self.prediction_store.update_label(transaction_id, is_fraud)
 
         # look for device record with device_id in hash
-        self.device_state.update_device_state(device_id, is_fraud)
+        self.device_state.update_fraud_count(device_id, is_fraud)
         
         print(f"processed label: {transaction_id}")
 
