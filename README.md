@@ -93,25 +93,32 @@ Run:
 ```bash
 python3 -m training.train_v2 \
     --model logistic_regression \
-    --save
+    [--save]
 ```
 
 ```text
 What this does:
 This script performs initial offline training of the fraud detection model:
 
-1. Fits and saves the `FraudDataPreprocessor`:
+1. Fits and saves (or logs) the `FraudDataPreprocessor`:
    - Learns scaling and preprocessing parameters from training data
    - Ensures consistent transformations during real-time inference
+   - Always logged to MLflow; saved to disk only if `--save` is specified
 
 2. Trains a Logistic Regression model using the first 50,000 time-ordered transactions:
    - SMOTE to address class imbalance
    - Hyperparameter tuning via cross-validation
    - Performance evaluation on a held-out 5,000-transaction test set
+   - Training metrics and hyperparameters automatically logged to MLflow
 
-3. Persists trained artifacts to the `models/` directory:
+3. Persists trained artifacts to the `models/` directory **only** if `--save` is provided:
    - `models/preprocessor.pkl`
    - `models/logistic_regression_model.pkl`
+```
+
+To launch the MLflow UI, run:
+```bash
+mlflow server --port 8080
 ```
 
 

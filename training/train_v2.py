@@ -11,7 +11,7 @@ from src.config import (
     RAW_DATA_PATH,
     TARGET_COL
 )
-from src.models.models_v2 import FraudDetectionModel, FraudModelTuner
+from src.models.models_v3 import FraudDetectionModel, FraudModelTuner
 from src.preprocessing import FraudDataPreprocessor
 from src.state.redis_store import (
     DeviceState,
@@ -122,11 +122,6 @@ class InitialTrain:
             else: # on unseen devices in unseend data
                 self.device_state[device_id]["fraud_count"] = 0
 
-    
-
-    def update_unseen_fraud_count(df):
-        """Update device fraud count after model inference, for future inference"""
-    
 
     def fit_preprocessor_model(self, df_train, params=None, transform=True):
         """
@@ -257,9 +252,6 @@ class InitialTrain:
         y_proba = model.predict_proba(X)[:,1]
 
         return processed_inference, y_pred, y_proba
-    
-    def update_prediction_hash(self, y_pred, y_val):
-        pass
 
 
     def train_pipeline(self, initial_rows=50000, train_percentage=0.8):
