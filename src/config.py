@@ -45,10 +45,12 @@ RAW_TEST_PATH = DATA_DIR / "raw_test.csv"
 MODELS_DIR = PROJECT_ROOT / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
+
 # Model files
 FEATURE_ENGINEER_PATH = MODELS_DIR / "feature_engineer.pkl"
 PREPROCESSOR_PATH = MODELS_DIR / "preprocessor.pkl"
-MODEL_PATH = MODELS_DIR / "logistic_regression_model.pkl"
+DEFAULT_MODEL_PATH = MODELS_DIR / "logistic_regression_model.pkl"
+MODEL_PATH = "mlruns/0/models/m-ee0499278d1f40c7a12ed888a2edbfdb/artifacts/model.pkl"
 
 # ============================================================================
 # Results Paths (constants)
