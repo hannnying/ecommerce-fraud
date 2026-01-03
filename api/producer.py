@@ -63,3 +63,7 @@ class TransactionProducer:
         }
 
         self.client.xadd(LABELS_STREAM, label_dict)
+
+if __name__=="__main__":
+    txn_producer = TransactionProducer()
+    transaction_ids = txn_producer.start_streaming()

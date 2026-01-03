@@ -4,10 +4,13 @@
     # get device_state, call compute_features, update device_state
     # run model: preprocessor and model
     # append to processed transaction redis store
+import os
+import time
 import pandas as pd
 import pickle
 from redis import Redis
 from src.config import (
+    DEFAULT_MODEL_PATH,
     LABELS_STREAM,
     PREPROCESSOR_PATH,
     MODEL_PATH,
@@ -29,7 +32,7 @@ from src.state.serializers import (
 )
 
 class InferenceConsumer:
-    def __init__(self, preprocessor_path=PREPROCESSOR_PATH, model_path=MODEL_PATH):
+    def __init__(self, preprocessor_path=PREPROCESSOR_PATH, model_path=DEFAULT_MODEL_PATH):
         self.preprocessor = None
         self.model = None
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
@@ -52,8 +55,9 @@ class InferenceConsumer:
             with open(model_path, "rb") as m:
                 self.model = pickle.load(m)
             print(f"Loaded model at {model_path} into InferenceConsumer")
+            
         except Exception as e:
-            print(f"Error loading model: {e}")
+            print(f"Error loading model, defaulted to loading from {DEFAULT_MODEL_PATH} instead")
 
     def handle_transaction(self, transaction_dict):
         """
@@ -180,5 +184,10 @@ class InferenceConsumer:
         
 
 if __name__=="__main__":
+    
+    while not os.path.exists(DEFAULT_MODEL_PATH):
+        print("Waiting for model to be trained...")
+        time.sleep(2)
+
     inference_consumer = InferenceConsumer()
     inference_consumer.start_consuming()

@@ -6,7 +6,7 @@ import pickle
 import pandas as pd
 from src.config import (
     MODELS_DIR,
-    MODEL_PATH,
+    DEFAULT_MODEL_PATH,
     PREPROCESSOR_PATH,
     RAW_DATA_PATH,
     TARGET_COL
@@ -338,9 +338,9 @@ def main():
         with open(PREPROCESSOR_PATH, "wb") as p:
             pickle.dump(preprocessor, p)
             print(f"preprocessor saved at: {PREPROCESSOR_PATH}")
-        with open(MODEL_PATH, "wb") as m:
+        with open(DEFAULT_MODEL_PATH, "wb") as m:
             pickle.dump(model, m)
-            print(f"model saved at: {MODEL_PATH}")
+            print(f"model saved at: {DEFAULT_MODEL_PATH}")
 
 
 if __name__=="__main__":

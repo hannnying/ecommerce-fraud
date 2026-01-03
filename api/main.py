@@ -1,7 +1,3 @@
-from datetime import datetime
-import json
-from uuid import uuid4
-from api.producer import TransactionProducer
 from fastapi import Depends, FastAPI, HTTPException
 import pandas as pd
 from redis import Redis
@@ -14,8 +10,7 @@ from src.config import (
     REDIS_DB,
     REDIS_HOST,
     REDIS_PORT,
-    RESULT_STREAM,
-    TRANSACTION_STREAM
+    RESULT_STREAM
 )
 
 def get_redis_client():
@@ -26,16 +21,6 @@ app = FastAPI()
 @app.get("/health")
 async def get_health():
     return {"message": "app is running!"}
-
-
-@app.post("/stream")
-async def stream():
-    try:
-        txn_producer = TransactionProducer()
-        transaction_ids = txn_producer.start_streaming()
-        return {"status": "queued", "transaction_ids": transaction_ids}
-    except Exception as e:
-        return {"status": f"An error occurred: {e}"}
 
     
 @app.get("/results/recent")

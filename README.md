@@ -141,6 +141,15 @@ Run Streamlit server in a separate terminal:
 streamlit run app.py
 ```
 
+## Run the Application with Docker
+
+Run:
+```bash
+docker compose up --build
+```
+
+visit: http://localhost:8501
+
 ## FastAPI Endpoints
 
 ### 1. /stream – Start Transaction Simulation
@@ -197,3 +206,4 @@ Notes:
 	•	predicted_class: 1 = fraud, 0 = non-fraud
 	•	fraud_probability: probability of being fraudulent
 	•	Returned transactions include all computed features used by the model
+
