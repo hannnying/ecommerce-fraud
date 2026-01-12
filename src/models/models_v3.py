@@ -5,6 +5,7 @@ import mlflow
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 from sklearn.model_selection import GridSearchCV
 import joblib
@@ -74,6 +75,11 @@ class FraudDetectionModel:
                  self.model = SVC(**self.params)
             else:
                 self.model = SVC()
+        elif self.model_type == "dt":
+            if self.params:
+                self.model = DecisionTreeClassifier(**self.params)
+            else:
+                self.model = DecisionTreeClassifier()
         elif self.model_type == 'random_forest':
             if self.params:
                 self.model = RandomForestClassifier(**self.params)

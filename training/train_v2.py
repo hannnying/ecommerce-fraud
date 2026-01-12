@@ -3,6 +3,7 @@ import argparse
 import json
 import pickle
 
+import numpy as np
 import pandas as pd
 from src.config import (
     MODELS_DIR,
@@ -50,45 +51,52 @@ class InitialTrain:
                 "kernel": ["linear", "poly"]
             }
         
+        if self.model_type == "dt":
+            self.param_grid = {
+                "max_depth": [5, 10],
+                "min_samples_leaf": [2, 5, 10],
+                "min_samples_split": [2, 5, 10]
+            }
 
+    
     def compute_features(self, row):
-        """Compute features for a transaction and update device_state."""
+        """Compue features for a transaction."""
         device_id = row["device_id"]
         time_setup_to_txn_seconds = (row["purchase_time"] - row["signup_time"]).total_seconds()
+        log_time_setup_to_txn_seconds = np.log1p(time_setup_to_txn_seconds)
 
         if device_id in self.device_state:
             device_stats = self.device_state[device_id]
-            txn_count = device_stats["txn_count"]
-            device_ip_consistency = len(device_stats["ip_addresses"]) == 1 \
-                                        and (row["ip_address"] in device_stats["ip_addresses"])
-            device_source_consistency = len(device_stats["sources"]) == 1 \
-                                        and (row["source"] in device_stats["sources"])
-            time_since_last_device_txn = (row["purchase_time"] - device_stats["last_transaction"]).total_seconds()
-            purchase_deviation_from_device_mean = abs(row["purchase_value"] - device_stats["purchase_sum"] / txn_count)
-            device_lifespan = (row["purchase_time"] - device_stats["first_seen"]).total_seconds()
-            fraud_rate = device_stats["fraud_count"] / txn_count 
+            first_device_transaction = False
+            txn_count = device_stats["txn_count"] + 1
+            
+            prev_purchase_value = device_stats["prev_purchase_value"]
+            scaled_device_purchase_diff = abs(row["purchase_value"] - prev_purchase_value) / prev_purchase_value
+            repeated_device_purchase = True if row["purchase_value"] == prev_purchase_value else False
+            
+            if row["sex"] == device_stats["prev_sex"] and row["age"] == device_stats["prev_age"]:
+                identity_changed = False
+            else:
+                identity_changed = True
 
         else:
+            first_device_transaction = True
             txn_count = 1
-            device_ip_consistency = True
-            device_source_consistency = True
-            time_since_last_device_txn = 99999
-            purchase_deviation_from_device_mean = 0
-            device_lifespan = 0
-            fraud_rate = 0
-        
+            scaled_device_purchase_diff = -1
+            repeated_device_purchase = 0
+            identity_changed = False
+
         processed_transaction = {
             "txn_count": txn_count,
-            "device_ip_consistency": device_ip_consistency,
-            "device_source_consistency": device_source_consistency,
-            "time_setup_to_txn_seconds": time_setup_to_txn_seconds,
-            "time_since_last_device_txn": time_since_last_device_txn, 
-            "purchase_deviation_from_device_mean": purchase_deviation_from_device_mean,
-            "device_lifespan": device_lifespan,
-            "device_fraud_rate": fraud_rate,
+            "log_time_setup_to_txn_seconds": log_time_setup_to_txn_seconds,
+            "first_device_transaction": first_device_transaction,
+            "scaled_device_purchase_diff": scaled_device_purchase_diff,
+            "repeated_device_purchase": repeated_device_purchase,
+            "identity_changed": identity_changed
         }
 
         return processed_transaction
+    
     
     def update_device_state(self, row):
         """When pipeline is run on unseen data, fraud_count does not get updated"""
@@ -98,29 +106,25 @@ class InitialTrain:
             device_stats = self.device_state[device_id]
             
             device_stats["txn_count"] += 1
+            device_stats["prev_purchase_value"] = row["purchase_value"]
+            device_stats["prev_sex"] = row["sex"]
+            device_stats["prev_age"] = row["age"]
+
             device_stats["ip_addresses"].add(row["ip_address"])
             device_stats["sources"].add(row["source"])
             device_stats["last_transaction"] = row["purchase_time"]
-            device_stats["purchase_sum"] += row["purchase_value"]
-
-            if "is_fraud" in row and row["is_fraud"]:
-                device_stats["fraud_count"] += 1
-            
 
         else:
             self.device_state[device_id] = {
                     "txn_count": 1,
+                    "prev_purchase_value": row["purchase_value"],
+                    "prev_sex": row["sex"],
+                    "prev_age": row["age"],
                     "ip_addresses": {row["ip_address"]},
                     "sources": {row["source"]},
                     "last_transaction": row["purchase_time"],
-                    "purchase_sum": row["purchase_value"],
                     "first_seen": row["purchase_time"],
                 }
-            
-            if "is_fraud" in row:
-                self.device_state[device_id]["fraud_count"] = 1 if row["is_fraud"] else 0
-            else: # on unseen devices in unseend data
-                self.device_state[device_id]["fraud_count"] = 0
 
 
     def fit_preprocessor_model(self, df_train, params=None, transform=True):
@@ -239,7 +243,7 @@ class InitialTrain:
         for idx, row in X.iterrows():
             processed_transaction = self.compute_features(row)
 
-            # device fraud_count freezes when runnign inference on unseen data
+            # device fraud_count freezes when running inference on unseen data
             if update_device_state: 
                 self.update_device_state(row)
 
@@ -254,7 +258,7 @@ class InitialTrain:
         return processed_inference, y_pred, y_proba
 
 
-    def train_pipeline(self, initial_rows=50000, train_percentage=0.8):
+    def train_pipeline(self, initial_rows=100000, train_percentage=0.9):
         preprocessor = FraudDataPreprocessor()
         df = pd.read_csv(RAW_DATA_PATH)
         df["signup_time"] = pd.to_datetime(df["signup_time"])
@@ -265,17 +269,12 @@ class InitialTrain:
 
         train = df[:initial_training_rows]
         train.reset_index(inplace=True)
-        test = df[initial_training_rows:initial_rows+1]
+        test = df[initial_training_rows:initial_rows]
         test.reset_index(inplace=True)
 
         # initial fitting to find the best hyperparameters with train set
         preprocessor, model, X_train_features, y_train, y_train_pred, y_train_proba = self.fit_preprocessor_model(
             train, params=None, transform=True
-        )
-
-        # store train predictions in prediction hash (where true labels are known too)
-        self.prediction_store.batch_update_predictions(
-            X_train_features, train["device_id"], y_train_pred, y_train_proba, y_train
         )
 
         # split test into X and y
@@ -286,20 +285,32 @@ class InitialTrain:
 
         print(classification_report(y_true=y_test, y_pred=y_test_pred))
 
-        # store predictions in prediction hash 
+        # final model fitting
+        final_train = pd.concat([train, test], axis=0)
+        final_train.reset_index(inplace=True)
+
+        final_preprocessor, final_model, final_X_train_features, final_y_train, final_y_train_pred, final_y_train_proba = self.fit_preprocessor_model(
+            final_train,
+            params=model.params, # reuse best params
+            transform=True
+        )
+
         self.prediction_store.batch_update_predictions(
-            X_test_features, test["device_id"], y_test_pred, y_test_proba, y_test
+            final_X_train_features,
+            final_train["device_id"],
+            final_y_train_pred,
+            final_y_train_proba
         )
 
         # load initial redis hash (fraud count not updated)
         redis_device_state = DeviceState()
         redis_device_state.load_initial(self.device_state)
 
-        # update fraud_count
-        for idx, is_fraud in enumerate(y_test):
-            redis_device_state.update_fraud_count(test["device_id"][idx], is_fraud)
+        # # update fraud_count
+        # for idx, is_fraud in enumerate(y_test):
+        #     redis_device_state.update_fraud_count(test["device_id"][idx], is_fraud)
     
-        return preprocessor, model
+        return final_preprocessor, final_model
 
 
 def main():
@@ -307,14 +318,14 @@ def main():
     parser.add_argument(
         '--resampling',
         type=str,
-        default='smote',
+        default='random_undersampling',
         choices=['random_undersampling', 'enn', 'smote', 'smoteenn'],
         help='Resampling technique to handle class imbalance (default: random_undersampling)'
     )
     parser.add_argument(
         '--model',
         type=str,
-        default='logistic_regression',
+        default='dt',
         help='Model type to train'
     )
     parser.add_argument(

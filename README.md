@@ -92,7 +92,7 @@ Before running the app, you need to train the Logistic Regression model.
 Run:
 ```bash
 python3 -m training.train_v2 \
-    --model logistic_regression \
+    --model dt \
     [--save]
 ```
 
@@ -105,15 +105,15 @@ This script performs initial offline training of the fraud detection model:
    - Ensures consistent transformations during real-time inference
    - Always logged to MLflow; saved to disk only if `--save` is specified
 
-2. Trains a Logistic Regression model using the first 50,000 time-ordered transactions:
-   - SMOTE to address class imbalance
+2. Trains a Decision Tree model using the first 50,000 time-ordered transactions:
+   - Random Undersampling to address class imbalance
    - Hyperparameter tuning via cross-validation
-   - Performance evaluation on a held-out 5,000-transaction test set
+   - Performance evaluation on a held-out 10,000-transaction test set
    - Training metrics and hyperparameters automatically logged to MLflow
 
 3. Persists trained artifacts to the `models/` directory **only** if `--save` is provided:
    - `models/preprocessor.pkl`
-   - `models/logistic_regression_model.pkl`
+   - `models/dt_model.pkl`
 ```
 
 To launch the MLflow UI, run:
@@ -121,21 +121,26 @@ To launch the MLflow UI, run:
 mlflow server --port 8080
 ```
 
+### Step 3: Stream transactions as events
+Run the producer process in another terminal:
+```bash
+python3 -m api.producer
+```
 
-### Step 3: Start worker
+### Step 4: Start worker
 Run the worker process in another terminal:
 ```bash
 python3 -m api.consumer
 ```
 
-### Step 4: Start FastAPI Backend
+### Step 5: Start FastAPI Backend
 Run FastAPI server in a separate terminal:
 ```bash
 uvicorn api.main:app --reload
 ```
 
 
-### Step 5: Start Streamlit UI
+### Step 6: Start Streamlit UI
 Run Streamlit server in a separate terminal:
 ```bash
 streamlit run app.py
@@ -152,30 +157,7 @@ visit: http://localhost:8501
 
 ## FastAPI Endpoints
 
-### 1. /stream – Start Transaction Simulation
-
-**Description:**
-Starts pushing transactions from the CSV to the Redis TRANSACTIONS_STREAM to simulate real-time events.
-
-**Method: POST**
-
-**Response Example:**
-
-```bash
-{
-  "status": "queued",
-  "transaction_ids": [
-    "92d999d0-215a-4d7e-ac57-d6eec00d9111",
-    "f31b2a8c-8f4b-4d2c-9c23-12a3b4e4d5f7",
-    ...
-  ]
-}
-```
-
-These `transaction_ids` correspond to the entries in the transaction stream.
-
-
-### 2. /get – Fetch Processed Transactions
+### 2. /results/recent– Fetch the k Most Recent Processed Transactions
 
 **Description:**
 Fetches the latest processed transactions and their predicted fraud classes from the RESULT_STREAM.
@@ -185,21 +167,24 @@ Fetches the latest processed transactions and their predicted fraud classes from
 **Response Example:**
 
 ```bash
-[
-  {
-    "transaction_id": "92d999d0-215a-4d7e-ac57-d6eec00d9111",
-    "txn_count": 3,
-    "device_ip_consistency": true,
-    "device_source_consistency": true,
-    "time_setup_to_txn_seconds": 1777456.0,
-    "time_since_last_device_txn": 0.0,
-    "purchase_deviation_from_device_mean": 0.0,
-    "device_lifespan": 0.0,
-    "predicted_class": 1,
-    "fraud_probability": 0.6598676441447116
-  },
-  ...
-]
+{
+  "count": 10,
+  "results": [
+    {
+      "stream_id": "1768261775779-0",
+      "transaction_id": "d3735538-7be5-42d6-891b-e612ddf8ab87",
+      "txn_count": "1",
+      "log_time_setup_to_txn_seconds": "14.666988811177923",
+      "first_device_transaction": "1",
+      "scaled_device_purchase_diff": "-1.0",
+      "repeated_device_purchase": "0",
+      "identity_changed": "0",
+      "predicted_class": "0",
+      "fraud_probability": "0.21608527131782945"
+    },
+    ...
+  ]
+}
 ```
 
 Notes:

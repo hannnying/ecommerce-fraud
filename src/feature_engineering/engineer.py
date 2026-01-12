@@ -1,38 +1,38 @@
+import numpy as np
+
 def compute_features(
         txn_count,
-        purchase_sum,
-        last_transaction,
-        first_seen,
-        ip_addresses,
-        sources,
-        fraud_count,
+        prev_purchase_value, 
+        prev_sex,
+        prev_age,
         signup_time,
         purchase_time,
         purchase_value,
-        source,
-        ip_address
+        sex,
+        age
 ):
 
-    time_setup_to_txn_seconds = (
-        purchase_time - signup_time
-    ).total_seconds()
+    time_setup_to_txn_seconds = (purchase_time - signup_time).total_seconds()
+    log_time_setup_to_txn_seconds = np.log1p(time_setup_to_txn_seconds)
 
-    device_ip_consistency = (not ip_addresses) or \
-                            (len(ip_addresses) == 1 and ip_address in ip_addresses)
-    
-    device_source_consistency = (not sources) or \
-                                (len(sources) == 1 and source in sources)
-        
-    time_since_last_device_id_txn = (
-        purchase_time - last_transaction 
-    ).total_seconds() if last_transaction else 99999
-    
-    device_lifespan = (
-        purchase_time - first_seen
-    ).total_seconds() if first_seen else 0
+    if txn_count == 0:
+        first_device_transaction = True
+    else:
+        first_device_transaction = False
 
-    purchase_deviation_from_device_mean = abs(purchase_value - purchase_sum / txn_count) if txn_count else 0
+    if prev_purchase_value:
+        scaled_device_purchase_diff = abs(purchase_value - prev_purchase_value) / prev_purchase_value
+        repeated_device_purchase = purchase_value == prev_purchase_value
+    else:
+        scaled_device_purchase_diff = -1
+        repeated_device_purchase = False
 
-    device_fraud_rate = fraud_count / (txn_count + 1)
+    if prev_sex and prev_age:
+        if sex == prev_sex and age == prev_age:
+            identity_changed = False
+        else:
+            identity_changed = True 
+    else:
+        identity_changed = False
 
-    return txn_count + 1, device_ip_consistency, device_source_consistency, time_setup_to_txn_seconds, time_since_last_device_id_txn, purchase_deviation_from_device_mean, device_lifespan, device_fraud_rate
+    return txn_count + 1, log_time_setup_to_txn_seconds, first_device_transaction, scaled_device_purchase_diff, repeated_device_purchase, identity_changed

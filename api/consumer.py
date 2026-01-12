@@ -67,28 +67,27 @@ class InferenceConsumer:
         device_id = transaction_dict["device_id"]
 
         # if device is unseen, get_device_state returns [None, .. , None]
-        txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count = self.device_state.get_device_state(device_id)
-        transaction_id, _, signup_time, purchase_time, purchase_value, device_id, source, _, _, _, ip_address = deserialize_transaction(transaction_dict)
-
+        txn_count, prev_purchase_value, prev_sex, prev_age, last_transaction, first_seen, ip_addresses, sources = self.device_state.get_device_state(device_id)
+        transaction_id, _, signup_time, purchase_time, purchase_value, device_id, source, browser, sex, age, ip_address = deserialize_transaction(transaction_dict)
+        
         processed_transaction = self.process_transaction(
-            txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count, signup_time, purchase_time, purchase_value, source, ip_address
+            txn_count, prev_purchase_value, prev_sex, prev_age, signup_time, purchase_time, purchase_value, sex, age
         )
 
         self.device_state.update_device_state(
             device_id,
             txn_count,
-            purchase_sum,
-            last_transaction,
+            purchase_value,
+            sex,
+            age,
             first_seen,
             ip_addresses,
             sources,
-            fraud_count,
-            signup_time,
             purchase_time,
-            purchase_value,
             source,
             ip_address,
         )
+
         print(f"processed transaction: {transaction_id}")
 
         # add processed transaction df to results stream
@@ -106,8 +105,8 @@ class InferenceConsumer:
 
         self.prediction_store.update_label(transaction_id, is_fraud)
 
-        # look for device record with device_id in hash
-        self.device_state.update_fraud_count(device_id, is_fraud)
+        # # look for device record with device_id in hash
+        # self.device_state.update_fraud_count(device_id, is_fraud)
         
         print(f"processed label: {transaction_id}")
 
@@ -143,20 +142,28 @@ class InferenceConsumer:
                         last_label_id = message_id
 
 
-    def process_transaction(self, txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count, signup_time, purchase_time, purchase_value, source, ip_address):
+    def process_transaction(self, txn_count, prev_purchase_value, prev_sex, prev_age, signup_time, purchase_time, purchase_value, sex, age):
         """
         Process single transaction and return a dictionary of the processed transaction with predictions.
         """
-        txn_count, device_ip_consistency, device_source_consistency, time_setup_to_txn_seconds, time_since_last_device_id_txn, purchase_deviation_from_device_mean, device_lifespan, device_fraud_rate = compute_features(txn_count, purchase_sum, last_transaction, first_seen, ip_addresses, sources, fraud_count, signup_time, purchase_time, purchase_value, source, ip_address)
+        txn_count, log_time_setup_to_txn_seconds, first_device_transaction, scaled_device_purchase_diff, repeated_device_purchase, identity_changed  = compute_features(
+        txn_count,
+        prev_purchase_value, 
+        prev_sex,
+        prev_age,
+        signup_time,
+        purchase_time,
+        purchase_value,
+        sex,
+        age
+)
         processed_transaction = {
             "txn_count": txn_count,
-            "device_ip_consistency": device_ip_consistency,
-            "device_source_consistency": device_source_consistency,
-            "time_setup_to_txn_seconds": time_setup_to_txn_seconds,
-            "time_since_last_device_txn": time_since_last_device_id_txn,
-            "purchase_deviation_from_device_mean": purchase_deviation_from_device_mean,
-            "device_lifespan": device_lifespan,
-            "device_fraud_rate": device_fraud_rate
+            "log_time_setup_to_txn_seconds": log_time_setup_to_txn_seconds,
+            "first_device_transaction": first_device_transaction,
+            "scaled_device_purchase_diff": scaled_device_purchase_diff,
+            "repeated_device_purchase": repeated_device_purchase,
+            "identity_changed": identity_changed
         }
         processed_transaction_df = pd.DataFrame([processed_transaction])
         processed_transaction_df = self.preprocessor.transform(processed_transaction_df)

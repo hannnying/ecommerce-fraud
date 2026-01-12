@@ -27,23 +27,27 @@ class DeviceState:
         
         for device_id, stats in device_state_dict.items():
             txn_count = stats["txn_count"]
-            purchase_sum = stats["purchase_sum"]
+            prev_purchase_value = stats["prev_purchase_value"]
+            prev_sex = stats["prev_sex"]
+            prev_age = stats["prev_age"]
+
+
             last_transaction = stats["last_transaction"]
             first_seen = stats["first_seen"]
             ip_addresses = stats["ip_addresses"]
             sources = stats["sources"]
-            fraud_count = stats["fraud_count"]
 
             self.client.hset(
                 f"device:{device_id}",
                 mapping=serialize_state(
                     txn_count,
-                    purchase_sum,
+                    prev_purchase_value,
+                    prev_sex,
+                    prev_age,
                     last_transaction,
                     first_seen,
                     ip_addresses,
-                    sources,
-                    fraud_count
+                    sources
                 )
             )
 
@@ -53,12 +57,13 @@ class DeviceState:
         raw = self.client.hmget(
             key,
             "txn_count",
-            "purchase_sum",
+            "prev_purchase_value",
+            "prev_sex",
+            "prev_age",
             "last_transaction",
             "first_seen",
             "ip_addresses",
-            "sources",
-            "fraud_count"
+            "sources"
         )
 
         return deserialize_raw_state(raw)
@@ -67,15 +72,13 @@ class DeviceState:
             self,
             device_id,
             txn_count,
-            purchase_sum,
-            last_transaction,
+            purchase_value,
+            sex,
+            age,
             first_seen,
             ip_addresses,
             sources,
-            fraud_count,
-            signup_time,
             purchase_time,
-            purchase_value,
             source,
             ip_address
     ):
@@ -89,32 +92,34 @@ class DeviceState:
 
         updated_state = {
             "txn_count": txn_count + 1,
-            "purchase_sum": purchase_sum + purchase_value,
+            "prev_purchase_value": purchase_value,
+            "prev_sex": sex,
+            "prev_age": age,
             "last_transaction": purchase_time,
             "first_seen": purchase_time if not first_seen else first_seen,
             "ip_addresses": ip_addresses,
             "sources": sources,
-            "fraud_count": fraud_count # updated when labels arrive 
         }
 
         self.client.hset(
             key, 
             mapping=serialize_state(
                 updated_state["txn_count"], 
-                updated_state["purchase_sum"],
+                updated_state["prev_purchase_value"],
+                updated_state["prev_sex"],
+                updated_state["prev_age"],
                 updated_state["last_transaction"],
                 updated_state["first_seen"],
                 updated_state["ip_addresses"],
-                updated_state["sources"],
-                updated_state["fraud_count"]
+                updated_state["sources"]
             )
         )
 
-    def update_fraud_count(self, device_id, is_fraud):
-        device_key = f"device:{device_id}"
+    # def update_fraud_count(self, device_id, is_fraud):
+    #     device_key = f"device:{device_id}"
 
-        if is_fraud:
-            self.client.hincrby(device_key, "fraud_count", 1)
+    #     if is_fraud:
+    #         self.client.hincrby(device_key, "fraud_count", 1)
 
 
 class PredictionStore:
@@ -155,13 +160,11 @@ class PredictionStore:
                 "predicted_class": processed_transaction_dict["predicted_class"],
                 "fraud_probability": processed_transaction_dict["fraud_probability"],
                 "txn_count": processed_transaction_dict["txn_count"],
-                "device_ip_consistency": processed_transaction_dict["device_ip_consistency"],
-                "device_source_consistency": processed_transaction_dict["device_source_consistency"],
-                "time_setup_to_txn_seconds": processed_transaction_dict["time_setup_to_txn_seconds"],
-                "time_since_last_device_txn": processed_transaction_dict["time_since_last_device_txn"],
-                "purchase_deviation_from_device_mean": processed_transaction_dict["purchase_deviation_from_device_mean"],
-                "device_lifespan": processed_transaction_dict["device_lifespan"],
-                "device_fraud_rate": processed_transaction_dict["device_fraud_rate"],
+                "log_time_setup_to_txn_seconds": processed_transaction_dict["log_time_setup_to_txn_seconds"],
+                "first_device_transaction": processed_transaction_dict["first_device_transaction"],
+                "scaled_device_purchase_diff": processed_transaction_dict["scaled_device_purchase_diff"],
+                "repeated_device_purchase": processed_transaction_dict["repeated_device_purchase"],
+                "identity_changed": processed_transaction_dict["identity_changed"],
                 "true_label": ""  # initially empty, updated later when label arrives
             }
         )
