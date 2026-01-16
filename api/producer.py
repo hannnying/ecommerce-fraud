@@ -19,8 +19,8 @@ from src.state.serializers import (
 from uuid import uuid4
 
 class TransactionProducer:
-    def __init__(self, transactions_per_second=100, start_idx=100000):
-        self.df = pd.read_csv(RAW_DATA_PATH)
+    def __init__(self, transactions_per_second=100000, start_idx=100000):
+        self.df = pd.read_csv(RAW_DATA_PATH).sort_values(by="purchase_time")
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
         self.tps = transactions_per_second
         self.start_idx = start_idx

@@ -89,6 +89,12 @@ LABELS_STREAM = "labels_stream"
 RESULT_STREAM = "results_stream"
 
 REDIS_BLOCK_TIMEOUT = int(os.getenv("REDIS_BLOCK_TIMEOUT", 5000)) # milliseconds
+BUCKET_SIZE_SECONDS = 60
+
+REDIS_STATE_DIR = PROJECT_ROOT / "redis_saved_state"
+DEVICE_STATE_PATH = REDIS_STATE_DIR / "device_state.pkl"
+GLOBAL_BUCKETS_PATH = REDIS_STATE_DIR / "global_buckets.pkl"
+IP_STATE_PATH = REDIS_STATE_DIR / "ip_state.pkl"
 
 # ============================================================================
 # Streamlit Configuration (constants)
