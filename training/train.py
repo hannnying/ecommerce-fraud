@@ -11,6 +11,7 @@ from src.config import (
     GLOBAL_BUCKETS_PATH,
     IP_STATE_PATH,
     RAW_DATA_PATH,
+    START_IDX,
     TARGET_COL
 )
 from src.models.models_v3 import FraudDetectionModel, FraudModelTuner
@@ -42,7 +43,7 @@ class Train:
         df["purchase_time"] = pd.to_datetime(df["purchase_time"])
         df = df.sort_values(by="purchase_time")
 
-        train = df[:100000]
+        train = df[:START_IDX]
         train.reset_index(inplace=True)
         processed_transactions = []
 
