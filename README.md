@@ -87,34 +87,13 @@ Start Redis Using Docker:
 docker run --name fraud-redis  -p 6379:6379 -d redis:latest
 ```
 
-### Step 2: Train model (also ensures that device_state is updated for model inference)
-Before running the app, you need to train the Logistic Regression model.
-Run:
+Run 
 ```bash
-python3 -m training.train_v2 \
-    --model dt \
-    [--save]
+python3 -m training.train
 ```
 
-```text
-What this does:
-This script performs initial offline training of the fraud detection model:
-
-1. Fits and saves (or logs) the `FraudDataPreprocessor`:
-   - Learns scaling and preprocessing parameters from training data
-   - Ensures consistent transformations during real-time inference
-   - Always logged to MLflow; saved to disk only if `--save` is specified
-
-2. Trains a Decision Tree model using the first 50,000 time-ordered transactions:
-   - Random Undersampling to address class imbalance
-   - Hyperparameter tuning via cross-validation
-   - Performance evaluation on a held-out 10,000-transaction test set
-   - Training metrics and hyperparameters automatically logged to MLflow
-
-3. Persists trained artifacts to the `models/` directory **only** if `--save` is provided:
-   - `models/preprocessor.pkl`
-   - `models/dt_model.pkl`
-```
+This step trains the Random Forest fraud model, logs the model to MLflow, saves a local model artifact, and exports Redis-backed state locally, which is used for feature engineering.
+Skip this step if a trained model and saved Redis state already exist.
 
 To launch the MLflow UI, run:
 ```bash
@@ -171,16 +150,27 @@ Fetches the latest processed transactions and their predicted fraud classes from
   "count": 10,
   "results": [
     {
-      "stream_id": "1768261775779-0",
-      "transaction_id": "d3735538-7be5-42d6-891b-e612ddf8ab87",
-      "txn_count": "1",
-      "log_time_setup_to_txn_seconds": "14.666988811177923",
-      "first_device_transaction": "1",
-      "scaled_device_purchase_diff": "-1.0",
-      "repeated_device_purchase": "0",
+      "stream_id": "1768548424071-0",
+      "transaction_id": "56ec435c-b0ed-4d4a-afae-a20c2dbf5c54",
+      "device_txn_idx": "2",
+      "first_device_txn": "0",
+      "device_time_since_last": "1.0",
+      "ip_switched": "0",
+      "sex_changed": "0",
+      "age_diff": "0",
+      "scaled_age_diff": "0.0",
       "identity_changed": "0",
-      "predicted_class": "0",
-      "fraud_probability": "0.21608527131782945"
+      "scaled_device_purchase_diff": "0.0",
+      "device_txn_velocity_1m": "1",
+      "device_txn_velocity_5m": "1",
+      "device_txn_velocity_1h": "1",
+      "device_txn_velocity_24h": "1",
+      "fast_purchase": "1",
+      "log_time_setup_to_txn_seconds": "0.6931471805599453",
+      "ip_txn_idx": "2",
+      "txn_velocity_1h": "30",
+      "predicted_class": "1",
+      "fraud_probability": "0.9123333333333333"
     },
     ...
   ]
