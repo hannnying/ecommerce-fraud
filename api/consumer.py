@@ -1,11 +1,6 @@
-# load model and preprocessor
-# reads from redis stream
-# for each entry,
-    # get device_state, call compute_features, update device_state
-    # run model: preprocessor and model
-    # append to processed transaction redis store
 import os
 import time
+import mlflow
 import pandas as pd
 import pickle
 from redis import Redis
@@ -30,7 +25,7 @@ from src.state.prediction_store import PredictionStore
 
 
 class InferenceConsumer:
-    def __init__(self, preprocessor_path, model_path):
+    def __init__(self, preprocessor_path, model_uri, model_path):
         self.preprocessor = None
         self.model = None
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
@@ -41,7 +36,8 @@ class InferenceConsumer:
         self.prediction_store = PredictionStore()
 
         self._initialize_redis()
-        self._initialize_preprocessor_model(preprocessor_path, model_path)
+        self._initialize_preprocessor(preprocessor_path)
+        self._initialize_model(model_uri, model_path)
 
     def _initialize_redis(self):
         print(f"Loading device state, global buckets and ip state")
@@ -51,7 +47,7 @@ class InferenceConsumer:
         self.ip_state = IPState.load_from_file(IP_STATE_PATH)
 
 
-    def _initialize_preprocessor_model(self, preprocessor_path, model_path):
+    def _initialize_preprocessor(self, preprocessor_path):
         try:
             with open(preprocessor_path, "rb") as p:
                 self.preprocessor = pickle.load(p)
@@ -60,13 +56,27 @@ class InferenceConsumer:
         except Exception as e:
             print(f"Error loading preprocessor: {e}")
 
+
+    def _initialize_model(self, model_uri, model_path=MODELS_DIR / "random_forest.pkl"):
+        print(f"Loading model from MLflow Registry: {model_uri}")
         try:
-            with open(model_path, "rb") as m:
-                self.model = pickle.load(m)
-            print(f"Loaded model at {model_path} into InferenceConsumer")
-            
-        except Exception as e:
-            print(f"Error loading model, defaulted to loading from {DEFAULT_MODEL_PATH} instead")
+            self.model = mlflow.sklearn.load_model(model_uri)
+        except Exception as mlflow_error:
+            print(f"Failed to load from MLflow: {mlflow_error}")
+            print(f"Falling back to local model at {model_path}")
+
+            try:
+                with open(model_path, "rb") as m:
+                    self.model = pickle.load(m)
+                print(f"Loaded model at {model_path} into InferenceConsumer")
+                    
+            except Exception as local_error:
+                raise RuntimeError(
+                    f"Failed to load model from MLflow and local path.\n"
+                    f"MLflow error: {mlflow_error}\n"
+                    f"Local error: {local_error}"
+            )
+
 
     def handle_transaction(self, transaction_dict):
         """
@@ -188,12 +198,11 @@ class InferenceConsumer:
 if __name__=="__main__":
     
     model_path = MODELS_DIR / "random_forest.pkl"
-    while not os.path.exists(model_path):
-        print("Waiting for model to be trained...")
-        time.sleep(2)
+    model_uri = "models:/fraud_detection_model/Production"
 
     inference_consumer = InferenceConsumer(
         preprocessor_path=PREPROCESSOR_PATH,
+        model_uri="models:/fraud_detection_model/Production",
         model_path=model_path
     )
     inference_consumer.start_consuming()

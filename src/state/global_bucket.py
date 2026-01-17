@@ -16,7 +16,7 @@ class GlobalVelocity:
         self.bucket_size_seconds = BUCKET_SIZE_SECONDS
 
     def update_global_bucket(self, purchase_time):
-        current_bucket = int(purchase_time.timestamp() // 60)
+        current_bucket = int(purchase_time.timestamp() // self.bucket_size_seconds)
         bucket_key = f"global:txn_count:bucket:{current_bucket}"
         self.client.incr(bucket_key)
         self.client.expire(bucket_key, 25 * 3600)
@@ -25,7 +25,7 @@ class GlobalVelocity:
         if time_window == "1h":
             num_buckets = 3600 // self.bucket_size_seconds
 
-        current_bucket = int(purchase_time.timestamp() // 60)
+        current_bucket = int(purchase_time.timestamp() // self.bucket_size_seconds)
         total = 0
 
         for i in range(num_buckets):

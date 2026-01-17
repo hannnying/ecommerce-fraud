@@ -1,20 +1,6 @@
 from datetime import datetime
 import json
 
-
-def deserialize_raw_state(raw):
-    txn_count = int(raw[0]) if raw[0] else 0
-    prev_purchase_value = float(raw[1]) if raw[1] else None
-    prev_sex = str(raw[2]) if raw[1] else ""
-    prev_age = int(raw[3]) if raw[1] else None
-    last_transaction = datetime.fromisoformat(raw[4]) if raw[4] else None
-    first_seen = datetime.fromisoformat(raw[5]) if raw[5] else None
-    ip_addresses = set(json.loads(raw[6])) if raw[6] else set()
-    sources = set(json.loads(raw[7])) if raw[7] else set()
-
-    return txn_count, prev_purchase_value, prev_sex, prev_age, last_transaction, first_seen, ip_addresses, sources
-
-
 def deserialize_transaction(transaction):
     transaction_id = transaction["transaction_id"]
     user_id = transaction["user_id"]
@@ -44,25 +30,6 @@ def serialize_processed_transaction(transaction_id, processed_transaction):
         "fraud_probability": float(processed_transaction["fraud_probability"])
     }
 
-
-def serialize_state(txn_count, prev_purchase_value, prev_sex, prev_age, last_transaction, first_seen, ip_addresses, sources):
-    if type(last_transaction) != str:
-        last_transaction = last_transaction.isoformat()
-
-    if type(first_seen) != str:
-        first_seen = first_seen.isoformat()
-
-    return {
-        "txn_count": txn_count,
-        "prev_purchase_value": float(prev_purchase_value),
-        "prev_sex": str(prev_sex),
-        "prev_age": int(prev_age),
-        "last_transaction": last_transaction,
-        "first_seen": first_seen,
-        "ip_addresss": json.dumps(list(ip_addresses)),
-        "sources": json.dumps(list(sources)),
-    }
-    
 
 
 def serialize_transaction(transaction_id, transaction): # serializes raw transaction

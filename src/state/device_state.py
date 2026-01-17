@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 import pickle
 import pandas as pd
-from typing import Dict, List
 from redis import Redis
 from src.config import(
    REDIS_DB,

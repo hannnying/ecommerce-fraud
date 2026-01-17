@@ -64,10 +64,12 @@ FIGURES_DIR.mkdir(exist_ok=True)
 # Model Parameters (constants)
 # ============================================================================
 TARGET_COL = "is_fraud"
-RANDOM_STATE = 42
+RANDOM_STATE = 0
 TEST_SIZE = 0.2
 CV_FOLDS = 5
 OPTIMIZATION_METRIC = "recall"
+
+START_IDX = 100000
 
 # ============================================================================
 # API Configuration (constants with sensible defaults)
@@ -102,37 +104,6 @@ IP_STATE_PATH = REDIS_STATE_DIR / "ip_state.pkl"
 STREAMLIT_HOST = "0.0.0.0"
 STREAMLIT_PORT = 8501
 
-# ============================================================================
-# Feature Configuration
-# ============================================================================
-# Columns to drop before modeling
-DROP_COLS = [
-    "user_id", "signup_time", "purchase_time",
-    "device_id", "ip_address", "country",
-    "sex", "age", "transactions_by_user_id"
-]
-
-# Categorical features
-CATEGORICAL_FEATURES = ["source", "browser"]
-
-# Model configurations
-MODEL_CONFIGS = {
-    'logistic_regression': {
-        'display_name': 'Logistic Regression (L1)',
-        'description': 'Best model - 72% recall, minimal overfitting',
-        'recommended': True
-    },
-    'random_forest': {
-        'display_name': 'Random Forest',
-        'description': 'Tree-based model, ~72% recall after tuning',
-        'recommended': True
-    },
-    'xgboost': {
-        'display_name': 'XGBoost',
-        'description': 'Gradient boosting, ~73% recall after tuning',
-        'recommended': True
-    }
-}
 
 # Hyperparameter grids for tuning
 PARAM_GRIDS = {

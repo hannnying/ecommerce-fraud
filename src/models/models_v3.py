@@ -2,6 +2,7 @@ from imblearn.combine import SMOTEENN
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import EditedNearestNeighbours, RandomUnderSampler
 import mlflow
+from mlflow.tracking import MlflowClient
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
@@ -9,13 +10,8 @@ from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 from sklearn.model_selection import GridSearchCV
 import joblib
-import numpy as np
 
-# let's not refactor it first, but save the model when working with self.model
-# implement FraudDetectionModel class that pipelines preprocessor and model together. 
-# can be used for both inference and training
-# resampling_type: resamppling technique used in training, should only be specified in training
-# why refactor: integration with mflow, allow automatic logging of sklearn model (FraudDetectionModel.model) and saving of sklearn objects (preprocessor and model)
+
 
 class FraudDetectionModel:
 
@@ -111,16 +107,32 @@ class FraudDetectionModel:
         X_train_resampled, y_train_resampled = self.resampler.fit_resample(X_train, y_train)
         print(f"Resampling resulted in: {len(X_train_resampled)}")
 
-        mlflow.sklearn.autolog()
+        mlflow.sklearn.autolog(log_models=False)
 
-        with mlflow.start_run():
+        with mlflow.start_run() as run:
             self.model.fit(X_train_resampled, y_train_resampled)
             train_score = self.model.score(X_train, y_train)
             resampled_train_score = self.model.score(X_train_resampled, y_train_resampled)
 
-            print(f"Training and Logging completed, with a train score of: {train_score:.3f}")
-            print(f"Training and Logging completed, with a train score on resampled data: {resampled_train_score:.3f}")
+            mlflow.sklearn.log_model(
+                self.model,
+                "model",
+                registered_model_name="fraud_detection_model"
+            )
 
+            run_id = run.info.run_id
+            print(f"Model loged and registered with run_id: {run_id}")
+
+        mlflow_client = MlflowClient()
+
+        latest_version = mlflow_client.get_latest_versions("fraud_detection_model", stages=["None"])[0]
+        mlflow_client.transition_model_version_stage(
+            name="fraud_detection_model",
+            version=latest_version.version,
+            stage="Production"
+        )
+
+        print(f"Model version {latest_version.version} promoted to Production")
 
         # Extract feature importance
         self._extract_feature_importance(X_train_resampled)
