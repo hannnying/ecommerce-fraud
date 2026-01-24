@@ -18,6 +18,7 @@ from src.config import (
     TRANSACTION_STREAM
 )
 from src.feature_engineering.engineer import TransactionFeatureEngineer
+from src.models.rule_based import RuleBasedModel
 from src.state.device_state import DeviceState
 from src.state.global_bucket import GlobalVelocity
 from src.state.ip_state import IPState
@@ -34,6 +35,7 @@ class InferenceConsumer:
         self.global_velocity = None
         self.ip_state = None
         self.prediction_store = PredictionStore()
+        self.rule_based_model = RuleBasedModel()
 
         self._initialize_redis()
         self._initialize_preprocessor(preprocessor_path)
@@ -57,7 +59,7 @@ class InferenceConsumer:
             print(f"Error loading preprocessor: {e}")
 
 
-    def _initialize_model(self, model_uri, model_path=MODELS_DIR / "random_forest.pkl"):
+    def _initialize_model(self, model_uri, model_path=MODELS_DIR / "logistic_regression.pkl"):
         print(f"Loading model from MLflow Registry: {model_uri}")
         try:
             self.model = mlflow.sklearn.load_model(model_uri)
@@ -93,21 +95,23 @@ class InferenceConsumer:
 
         processed_transaction_pred = self.predict_transaction(processed_transaction)
 
-        device_id, txn_count, purchase_value, sex, age, first_seen, ip_addresses, sources, purchase_time, source, ip_address = device_data
+        device_id, txn_count, purchase_value, sex, age, purchase_time, signup_time, ip_address, txn_count, first_seen_signup, first_seen, identities, purchase_values = device_data
 
         self.device_state.update_device_state(
             device_id,
-            txn_count,
             purchase_value,
             sex,
             age,
-            first_seen,
-            ip_addresses,
-            sources,
             purchase_time,
-            source,
+            signup_time,
             ip_address,
+            txn_count,
+            first_seen_signup,
+            first_seen,
+            identities,
+            purchase_values
         )
+
         self.device_state.update_device_timestamp(device_id, transaction_id, purchase_time)
         self.global_velocity.update_global_bucket(purchase_time)
         self.ip_state.update_ip_txn_idx(ip_address)
@@ -115,7 +119,7 @@ class InferenceConsumer:
         print(f"processed transaction: {transaction_id}")
 
         # add processed transaction df to results stream
-        self.store_result(transaction_id, device_id, processed_transaction_pred)
+        self.store_result(transaction_id, device_id, purchase_time, processed_transaction_pred)
 
     
     def handle_label(self, label_dict):
@@ -169,23 +173,34 @@ class InferenceConsumer:
         """
         Predict whether transaction is fraudulent or not.
         """
+        
+        rule_based_label = self.rule_based_model.predict(processed_transaction)
+        
+        if rule_based_label == -1: # 
+            processed_transaction_df = pd.DataFrame([processed_transaction])
 
-        processed_transaction_df = pd.DataFrame([processed_transaction])
+            # scale
+            scaled_processed_transaction_df = self.preprocessor.transform(processed_transaction_df)
 
-        # Add predictions to processed transaction dict
-        processed_transaction["predicted_class"] = int(self.model.predict(processed_transaction_df)[0]) # customise this if you want a custom threshold
-        processed_transaction["fraud_probability"] = float(self.model.predict_proba(processed_transaction_df)[0, 1])
+            # Add predictions to processed transaction dict
+            processed_transaction["predicted_class"] = int(self.model.predict(scaled_processed_transaction_df)[0]) # customise this if you want a custom threshold
+            processed_transaction["fraud_probability"] = float(self.model.predict_proba(scaled_processed_transaction_df)[0, 1])
+        
+        else:
+            processed_transaction["predicted_class"] = rule_based_label
+            processed_transaction["fraud_probability"] = 0.99 if rule_based_label == 1 else 0.01
+        
         return processed_transaction
 
     
-    def store_result(self, transaction_id, device_id, processed_transaction):
+    def store_result(self, transaction_id, device_id, purchase_time, processed_transaction):
         """
         Store prediction results:
         1. Append immutable prediction event to RESULT_STREAM
         2. Persist mutable prediction record in Redis hash (for label join & evaluation)
         """
 
-        processed_transaction_dict = self.prediction_store.serialize_processed_transaction(transaction_id, processed_transaction)
+        processed_transaction_dict = self.prediction_store.serialize_processed_transaction(transaction_id, purchase_time, processed_transaction)
         
         # append immutable prediction event to RESULT_STREAM
         self.client.xadd(RESULT_STREAM, processed_transaction_dict)
@@ -196,8 +211,12 @@ class InferenceConsumer:
         
 
 if __name__=="__main__":
-    
-    model_path = MODELS_DIR / "random_forest.pkl"
+
+    model_path = MODELS_DIR / "logistic_regression.pkl"
+    # This URI always points to the latest model in Production stage.
+    # When training with logging=True (training/train.py), new models are automatically
+    # registered and promoted to Production (see src/models/models.py:149-158).
+    # MLflow's Production stage reference is updated dynamically, ensuring this loads the latest promoted model.
     model_uri = "models:/fraud_detection_model/Production"
 
     inference_consumer = InferenceConsumer(

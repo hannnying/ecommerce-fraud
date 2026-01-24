@@ -49,8 +49,6 @@ MODELS_DIR.mkdir(exist_ok=True)
 # Model files
 FEATURE_ENGINEER_PATH = MODELS_DIR / "feature_engineer.pkl"
 PREPROCESSOR_PATH = MODELS_DIR / "preprocessor.pkl"
-DEFAULT_MODEL_PATH = MODELS_DIR / "dt_model.pkl"
-MODEL_PATH = "mlruns/0/models/m-ee0499278d1f40c7a12ed888a2edbfdb/artifacts/model.pkl"
 
 # ============================================================================
 # Results Paths (constants)
@@ -68,8 +66,9 @@ RANDOM_STATE = 0
 TEST_SIZE = 0.2
 CV_FOLDS = 5
 OPTIMIZATION_METRIC = "recall"
+THRESHOLD = 0.4
 
-START_IDX = 100000
+START_IDX = 120000
 
 # ============================================================================
 # API Configuration (constants with sensible defaults)

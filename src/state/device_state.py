@@ -17,50 +17,48 @@ class DeviceState:
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 
     def update_device_state(
-            self,
-            device_id,
-            txn_count,
-            purchase_value,
-            sex,
-            age,
-            first_seen,
-            ip_addresses,
-            sources,
-            purchase_time,
-            source,
-            ip_address
+        self,
+        device_id,
+        purchase_value,
+        sex,
+        age,
+        purchase_time,
+        signup_time,
+        ip_address,
+        txn_count,
+        first_seen_signup,
+        first_seen,
+        identities,
+        purchase_values
     ):
         """Update device state."""
 
         key = f"device:{device_id}"
-        
-        ip_addresses.add(ip_address)
-        sources.add(source)
+
+        identities.add(sex + str(age))
+        purchase_values.append(purchase_value)
 
         updated_state = {
             "txn_count": txn_count + 1,
-            "prev_purchase_value": purchase_value,
-            "prev_sex": sex,
-            "prev_age": age,
-            "last_transaction": purchase_time,
-            "last_ip": ip_address,
+            "first_seen_signup": signup_time if not first_seen_signup else first_seen_signup,
             "first_seen": purchase_time if not first_seen else first_seen,
-            "ip_addresses": ip_addresses,
-            "sources": sources,
+            "last_seen": purchase_time,
+            "prev_ip": ip_address,
+            "identities": identities,
+            "purchase_values": purchase_values
         }
+
 
         self.client.hset(
             key, 
             mapping=self.serialize_device_state(
                 updated_state["txn_count"], 
-                updated_state["prev_purchase_value"],
-                updated_state["prev_sex"],
-                updated_state["prev_age"],
-                updated_state["last_transaction"],
-                updated_state["last_ip"],
+                updated_state["first_seen_signup"],
                 updated_state["first_seen"],
-                updated_state["ip_addresses"],
-                updated_state["sources"]
+                updated_state["last_seen"],
+                updated_state["prev_ip"],
+                updated_state["identities"],
+                updated_state["purchase_values"]
             )
         )
         
@@ -74,55 +72,51 @@ class DeviceState:
         timestamp_threshold = (purchase_time - pd.Timedelta(days=1)).timestamp()
         self.client.zremrangebyscore(key, float("-inf"), timestamp_threshold)
 
-    
-    def serialize_device_state(self, txn_count, prev_purchase_value, prev_sex, prev_age, last_transaction, last_ip, first_seen, ip_addresses, sources):
-        if type(last_transaction) != str:
-            last_transaction = last_transaction.isoformat()
+
+    def serialize_device_state(self, txn_count, first_seen_signup, first_seen, last_seen, prev_ip, identities, purchase_values):
+        if type(first_seen_signup) != str:
+            first_seen_signup = first_seen_signup.isoformat()
 
         if type(first_seen) != str:
             first_seen = first_seen.isoformat()
-
+        
+        if type(last_seen) != str:
+            last_seen = last_seen.isoformat()
+        
         return {
             "txn_count": txn_count,
-            "prev_purchase_value": float(prev_purchase_value),
-            "prev_sex": str(prev_sex),
-            "prev_age": int(prev_age),
-            "last_transaction": last_transaction,
-            "last_ip": float(last_ip),
+            "first_seen_signup": first_seen_signup,
             "first_seen": first_seen,
-            "ip_addresss": json.dumps(list(ip_addresses)),
-            "sources": json.dumps(list(sources)),
+            "last_seen": last_seen,
+            "prev_ip": float(prev_ip),
+            "identities": json.dumps(list(identities)),
+            "purchase_values": json.dumps(purchase_values)
         }
-    
+
 
     def deserialize_device_state(self, raw):
         txn_count = int(raw[0]) if raw[0] else 0
-        prev_purchase_value = float(raw[1]) if raw[1] else None
-        prev_sex = str(raw[2]) if raw[1] else ""
-        prev_age = int(raw[3]) if raw[1] else None
-        last_transaction = datetime.fromisoformat(raw[4]) if raw[4] else None
-        last_ip = float(raw[5]) if raw[5] else None
-        first_seen = datetime.fromisoformat(raw[6]) if raw[6] else None
-        ip_addresses = set(json.loads(raw[7])) if raw[7] else set()
-        sources = set(json.loads(raw[8])) if raw[8] else set()
+        first_seen_signup = datetime.fromisoformat(raw[1]) if raw[1] else None
+        first_seen = datetime.fromisoformat(raw[2]) if raw[2] else None
+        last_seen = datetime.fromisoformat(raw[3]) if raw[3] else None
+        prev_ip = float(raw[4]) if raw[4] else None
+        identities = set(json.loads(raw[5])) if raw[5] else set()
+        purchase_values = list(json.loads(raw[6])) if raw[6] else []
 
-        return txn_count, prev_purchase_value, prev_sex, prev_age, last_transaction, last_ip, first_seen, ip_addresses, sources
+        return txn_count, first_seen_signup, first_seen, last_seen, prev_ip, identities, purchase_values
 
-        
     def get_device_state(self, device_id):
         key = f"device:{device_id}"
 
         raw = self.client.hmget(
             key,
             "txn_count",
-            "prev_purchase_value",
-            "prev_sex",
-            "prev_age",
-            "last_transaction",
-            "last_ip",
+            "first_seen_signup",
             "first_seen",
-            "ip_addresses",
-            "sources"
+            "last_seen",
+            "prev_ip",
+            "identities",
+            "purchase_values",
         )
 
         return self.deserialize_device_state(raw)

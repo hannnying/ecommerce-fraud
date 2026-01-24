@@ -25,6 +25,13 @@ class GlobalVelocity:
         if time_window == "1h":
             num_buckets = 3600 // self.bucket_size_seconds
 
+        elif time_window == "24h":
+            num_buckets = 86400 // self.bucket_size_seconds
+
+        else:
+            raise ValueError(f"{time_window} not supported")
+
+
         current_bucket = int(purchase_time.timestamp() // self.bucket_size_seconds)
         total = 0
 
