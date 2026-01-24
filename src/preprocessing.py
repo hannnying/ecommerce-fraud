@@ -34,7 +34,7 @@ class FraudDataPreprocessor:
             transformers.append(("num", StandardScaler(), self.numeric_features))
 
         if self.categorical_features:
-            transformers.append("cat", OneHotEncoder(handle_unknown="ignore", spare_output=False))
+            transformers.append(("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), self.categorical_features))
 
         if self.boolean_features:
             transformers.append(("bool", FunctionTransformer(self.bool_to_int), self.boolean_features))

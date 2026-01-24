@@ -1,8 +1,6 @@
-import random
 from redis import Redis
 import numpy as np
 import pandas as pd
-import json
 import time
 from datetime import datetime, timedelta
 from src.config import (
@@ -11,6 +9,7 @@ from src.config import (
     REDIS_DB,
     REDIS_HOST,
     REDIS_PORT,
+    START_IDX,
     TRANSACTION_STREAM
 )
 from src.state.serializers import (
@@ -19,8 +18,8 @@ from src.state.serializers import (
 from uuid import uuid4
 
 class TransactionProducer:
-    def __init__(self, transactions_per_second=100, start_idx=50000):
-        self.df = pd.read_csv(RAW_DATA_PATH)
+    def __init__(self, transactions_per_second=100, start_idx=START_IDX):
+        self.df = pd.read_csv(RAW_DATA_PATH).sort_values(by="purchase_time")
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
         self.tps = transactions_per_second
         self.start_idx = start_idx
@@ -29,7 +28,7 @@ class TransactionProducer:
     def start_streaming(self):
         """Simulate real-time transactions arriving and return their ids."""
         transaction_ids = []
-        for idx in range(self.start_idx, self.start_idx+100):
+        for idx in range(self.start_idx, len(self.df)):
             row = self.df.iloc[idx]
 
             try:
@@ -63,3 +62,7 @@ class TransactionProducer:
         }
 
         self.client.xadd(LABELS_STREAM, label_dict)
+
+if __name__=="__main__":
+    txn_producer = TransactionProducer()
+    transaction_ids = txn_producer.start_streaming()

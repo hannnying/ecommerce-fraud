@@ -87,79 +87,56 @@ Start Redis Using Docker:
 docker run --name fraud-redis  -p 6379:6379 -d redis:latest
 ```
 
-### Step 2: Train model (also ensures that device_state is updated for model inference)
-Before running the app, you need to train the Logistic Regression model.
-Run:
+Run 
 ```bash
-python3 -m training.train_v2 \
-    --model logistic_regression \
-    --save
+python3 -m training.train
 ```
 
-```text
-What this does:
-This script performs initial offline training of the fraud detection model:
+This step trains the Random Forest fraud model, logs the model to MLflow, saves a local model artifact, and exports Redis-backed state locally, which is used for feature engineering.
+Skip this step if a trained model and saved Redis state already exist.
 
-1. Fits and saves the `FraudDataPreprocessor`:
-   - Learns scaling and preprocessing parameters from training data
-   - Ensures consistent transformations during real-time inference
-
-2. Trains a Logistic Regression model using the first 50,000 time-ordered transactions:
-   - SMOTE to address class imbalance
-   - Hyperparameter tuning via cross-validation
-   - Performance evaluation on a held-out 5,000-transaction test set
-
-3. Persists trained artifacts to the `models/` directory:
-   - `models/preprocessor.pkl`
-   - `models/logistic_regression_model.pkl`
+To launch the MLflow UI, run:
+```bash
+mlflow server --port 8080
 ```
 
+### Step 3: Stream transactions as events
+Run the producer process in another terminal:
+```bash
+python3 -m api.producer
+```
 
-### Step 3: Start worker
+### Step 4: Start worker
 Run the worker process in another terminal:
 ```bash
 python3 -m api.consumer
 ```
 
-### Step 4: Start FastAPI Backend
+### Step 5: Start FastAPI Backend
 Run FastAPI server in a separate terminal:
 ```bash
 uvicorn api.main:app --reload
 ```
 
 
-### Step 5: Start Streamlit UI
+### Step 6: Start Streamlit UI
 Run Streamlit server in a separate terminal:
 ```bash
 streamlit run app.py
 ```
 
-## FastAPI Endpoints
+## Run the Application with Docker
 
-### 1. /stream – Start Transaction Simulation
-
-**Description:**
-Starts pushing transactions from the CSV to the Redis TRANSACTIONS_STREAM to simulate real-time events.
-
-**Method: POST**
-
-**Response Example:**
-
+Run:
 ```bash
-{
-  "status": "queued",
-  "transaction_ids": [
-    "92d999d0-215a-4d7e-ac57-d6eec00d9111",
-    "f31b2a8c-8f4b-4d2c-9c23-12a3b4e4d5f7",
-    ...
-  ]
-}
+docker compose up --build
 ```
 
-These `transaction_ids` correspond to the entries in the transaction stream.
+visit: http://localhost:8501
 
+## FastAPI Endpoints
 
-### 2. /get – Fetch Processed Transactions
+### 2. /results/recent– Fetch the k Most Recent Processed Transactions
 
 **Description:**
 Fetches the latest processed transactions and their predicted fraud classes from the RESULT_STREAM.
@@ -169,24 +146,39 @@ Fetches the latest processed transactions and their predicted fraud classes from
 **Response Example:**
 
 ```bash
-[
-  {
-    "transaction_id": "92d999d0-215a-4d7e-ac57-d6eec00d9111",
-    "txn_count": 3,
-    "device_ip_consistency": true,
-    "device_source_consistency": true,
-    "time_setup_to_txn_seconds": 1777456.0,
-    "time_since_last_device_txn": 0.0,
-    "purchase_deviation_from_device_mean": 0.0,
-    "device_lifespan": 0.0,
-    "predicted_class": 1,
-    "fraud_probability": 0.6598676441447116
-  },
-  ...
-]
+{
+  "count": 10,
+  "results": [
+    {
+      "stream_id": "1768548424071-0",
+      "transaction_id": "56ec435c-b0ed-4d4a-afae-a20c2dbf5c54",
+      "device_txn_idx": "2",
+      "first_device_txn": "0",
+      "device_time_since_last": "1.0",
+      "ip_switched": "0",
+      "sex_changed": "0",
+      "age_diff": "0",
+      "scaled_age_diff": "0.0",
+      "identity_changed": "0",
+      "scaled_device_purchase_diff": "0.0",
+      "device_txn_velocity_1m": "1",
+      "device_txn_velocity_5m": "1",
+      "device_txn_velocity_1h": "1",
+      "device_txn_velocity_24h": "1",
+      "fast_purchase": "1",
+      "log_time_setup_to_txn_seconds": "0.6931471805599453",
+      "ip_txn_idx": "2",
+      "txn_velocity_1h": "30",
+      "predicted_class": "1",
+      "fraud_probability": "0.9123333333333333"
+    },
+    ...
+  ]
+}
 ```
 
 Notes:
 	•	predicted_class: 1 = fraud, 0 = non-fraud
 	•	fraud_probability: probability of being fraudulent
 	•	Returned transactions include all computed features used by the model
+

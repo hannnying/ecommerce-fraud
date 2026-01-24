@@ -45,10 +45,10 @@ RAW_TEST_PATH = DATA_DIR / "raw_test.csv"
 MODELS_DIR = PROJECT_ROOT / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
+
 # Model files
 FEATURE_ENGINEER_PATH = MODELS_DIR / "feature_engineer.pkl"
 PREPROCESSOR_PATH = MODELS_DIR / "preprocessor.pkl"
-MODEL_PATH = MODELS_DIR / "logistic_regression_model.pkl"
 
 # ============================================================================
 # Results Paths (constants)
@@ -62,10 +62,13 @@ FIGURES_DIR.mkdir(exist_ok=True)
 # Model Parameters (constants)
 # ============================================================================
 TARGET_COL = "is_fraud"
-RANDOM_STATE = 42
+RANDOM_STATE = 0
 TEST_SIZE = 0.2
 CV_FOLDS = 5
 OPTIMIZATION_METRIC = "recall"
+THRESHOLD = 0.4
+
+START_IDX = 120000
 
 # ============================================================================
 # API Configuration (constants with sensible defaults)
@@ -87,6 +90,12 @@ LABELS_STREAM = "labels_stream"
 RESULT_STREAM = "results_stream"
 
 REDIS_BLOCK_TIMEOUT = int(os.getenv("REDIS_BLOCK_TIMEOUT", 5000)) # milliseconds
+BUCKET_SIZE_SECONDS = 60
+
+REDIS_STATE_DIR = PROJECT_ROOT / "redis_saved_state"
+DEVICE_STATE_PATH = REDIS_STATE_DIR / "device_state.pkl"
+GLOBAL_BUCKETS_PATH = REDIS_STATE_DIR / "global_buckets.pkl"
+IP_STATE_PATH = REDIS_STATE_DIR / "ip_state.pkl"
 
 # ============================================================================
 # Streamlit Configuration (constants)
@@ -94,37 +103,6 @@ REDIS_BLOCK_TIMEOUT = int(os.getenv("REDIS_BLOCK_TIMEOUT", 5000)) # milliseconds
 STREAMLIT_HOST = "0.0.0.0"
 STREAMLIT_PORT = 8501
 
-# ============================================================================
-# Feature Configuration
-# ============================================================================
-# Columns to drop before modeling
-DROP_COLS = [
-    "user_id", "signup_time", "purchase_time",
-    "device_id", "ip_address", "country",
-    "sex", "age", "transactions_by_user_id"
-]
-
-# Categorical features
-CATEGORICAL_FEATURES = ["source", "browser"]
-
-# Model configurations
-MODEL_CONFIGS = {
-    'logistic_regression': {
-        'display_name': 'Logistic Regression (L1)',
-        'description': 'Best model - 72% recall, minimal overfitting',
-        'recommended': True
-    },
-    'random_forest': {
-        'display_name': 'Random Forest',
-        'description': 'Tree-based model, ~72% recall after tuning',
-        'recommended': True
-    },
-    'xgboost': {
-        'display_name': 'XGBoost',
-        'description': 'Gradient boosting, ~73% recall after tuning',
-        'recommended': True
-    }
-}
 
 # Hyperparameter grids for tuning
 PARAM_GRIDS = {
