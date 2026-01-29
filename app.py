@@ -11,13 +11,13 @@ BACKEND_URL = f"http://{BACKEND_HOST}:{API_PORT}"
 
 # Page configuration
 st.set_page_config(
-    page_title="E-commerce Fraud Detection Dashboard",
+    page_title="E-commerce Fraud Detection - Model Performance",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("🛡️ E-commerce Fraud Detection Dashboard")
+st.title("🛡️ Fraud Detection Model Performance Monitor")
 
 # ============================================================================
 # Sidebar Configuration
@@ -33,15 +33,6 @@ REFRESH_INTERVAL = st.sidebar.number_input(
     step=1
 )
 
-# Transaction display settings
-k = st.sidebar.slider(
-    "Recent transactions to display",
-    min_value=10,
-    max_value=100,
-    value=50,
-    step=10
-)
-
 # Fraud threshold settings
 st.sidebar.subheader("🎯 Fraud Detection")
 fraud_threshold = st.sidebar.slider(
@@ -53,19 +44,14 @@ fraud_threshold = st.sidebar.slider(
     help="Transactions above this probability are classified as fraud"
 )
 
-high_risk_threshold = st.sidebar.slider(
-    "High-risk alert threshold",
-    min_value=0.5,
-    max_value=1.0,
-    value=0.8,
-    step=0.05,
-    help="Transactions above this threshold trigger high-risk alerts"
+# Rolling window settings
+st.sidebar.subheader("📊 Rolling Window")
+window_sizes = st.sidebar.multiselect(
+    "Window sizes to display",
+    options=[1000, 5000, 10000, 20000],
+    default=[1000, 5000, 10000],
+    help="Select which rolling window sizes to monitor"
 )
-
-# Filter settings
-st.sidebar.subheader("🔍 Filters")
-show_fraud_only = st.sidebar.checkbox("Show fraud only", value=False)
-show_legitimate_only = st.sidebar.checkbox("Show legitimate only", value=False)
 
 # Auto-refresh
 st_autorefresh(interval=REFRESH_INTERVAL * 1000, limit=None)
@@ -84,369 +70,504 @@ def fetch_data(endpoint, params=None, default=None):
         st.sidebar.warning(f"API Error ({endpoint}): {str(e)[:50]}")
         return default
 
-def safe_float(value, default=0.0):
-    """Safely convert value to float."""
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return default
-
-def safe_int(value, default=0):
-    """Safely convert value to int."""
-    try:
-        return int(value)
-    except (ValueError, TypeError):
-        return default
-
 # ============================================================================
 # Fetch Data from Backend
 # ============================================================================
-# Existing endpoint
-recent_data = fetch_data("/results/recent", params={"k": k}, default={"results": []})
-recent_transactions = recent_data.get("results", [])
+# Cumulative evaluation
+eval_cumulative = fetch_data("/evaluate", params={"threshold": fraud_threshold}, default=None)
 
-# New endpoints (with graceful fallback)
-summary_stats = fetch_data("/stats/summary", default=None)
-hourly_stats = fetch_data("/stats/hourly", params={"hours": 24}, default=None)
-high_risk_data = fetch_data("/results/high-risk", params={"threshold": high_risk_threshold, "k": 20}, default=None)
-feature_stats = fetch_data("/stats/features", default=None)
+# Rolling window evaluations
+eval_rolling = {}
+for window_size in window_sizes:
+    data = fetch_data(
+        "/evaluate/rolling",
+        params={"window_size": window_size, "threshold": fraud_threshold},
+        default=None
+    )
+    if data:
+        eval_rolling[window_size] = data
 
-# Existing endpoint
-eval_metrics = fetch_data("/evaluate", params={"threshold": fraud_threshold}, default=None)
+# Drift monitoring
+drift_window_size = min(window_sizes) if window_sizes else 5000
+drift_data = fetch_data(
+    "/drift/check",
+    params={"window_size": drift_window_size, "threshold": 0.2},
+    default=None
+)
 
 # ============================================================================
-# PHASE 1: Statistics Summary Cards
+# SECTION 0: Fraud Rate Overview
 # ============================================================================
-st.header("📊 Real-Time Statistics")
+st.header("📊 Fraud Rate Overview")
 
-# Calculate stats from recent transactions if /stats/summary not available
-if summary_stats is None and recent_transactions:
-    df_recent = pd.DataFrame(recent_transactions)
-    df_recent['fraud_probability'] = df_recent['fraud_probability'].apply(safe_float)
-    df_recent['predicted_class'] = df_recent['predicted_class'].apply(safe_int)
+col_overview1, col_overview2 = st.columns(2)
 
-    total_txns = len(df_recent)
-    fraud_count = int(df_recent['predicted_class'].sum())
-    fraud_percentage = (fraud_count / total_txns * 100) if total_txns > 0 else 0
-    avg_fraud_prob = df_recent['fraud_probability'].mean()
-    high_risk_count = len(df_recent[df_recent['fraud_probability'] >= high_risk_threshold])
-    legitimate_count = total_txns - fraud_count
+with col_overview1:
+    if eval_cumulative and eval_cumulative.get('count', 0) > 0:
+        cumulative_actual_rate = eval_cumulative.get('actual_fraud_rate', 0) * 100 if 'actual_fraud_rate' in eval_cumulative else None
+        cumulative_predicted_rate = eval_cumulative.get('predicted_fraud_rate', 0) * 100 if 'predicted_fraud_rate' in eval_cumulative else None
 
-    summary_stats = {
-        "total_transactions": total_txns,
-        "fraud_count": fraud_count,
-        "fraud_percentage": fraud_percentage,
-        "avg_fraud_probability": avg_fraud_prob,
-        "high_risk_count": high_risk_count,
-        "legitimate_count": legitimate_count
-    }
+        st.subheader("🗂️ Cumulative (All Transactions)")
 
-if summary_stats:
-    col1, col2, col3, col4 = st.columns(4)
+        if cumulative_actual_rate is not None:
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric(
+                    label="Actual Fraud Rate",
+                    value=f"{cumulative_actual_rate:.2f}%",
+                    help="Ground truth fraud rate across all labeled transactions"
+                )
+            with col_b:
+                if cumulative_predicted_rate is not None:
+                    delta = cumulative_predicted_rate - cumulative_actual_rate
+                    st.metric(
+                        label="Predicted Fraud Rate",
+                        value=f"{cumulative_predicted_rate:.2f}%",
+                        delta=f"{delta:+.2f}%",
+                        help="Model's predicted fraud rate across all transactions"
+                    )
 
-    with col1:
+        st.caption(f"Based on {eval_cumulative.get('count', 0):,} labeled transactions")
+    else:
+        st.info("⏳ Waiting for labeled transactions...")
+
+with col_overview2:
+    if eval_rolling and window_sizes:
+        # Use the smallest window size as "current" (most recent)
+        current_window_size = min(window_sizes)
+        current_data = eval_rolling.get(current_window_size)
+
+        if current_data and current_data.get('count', 0) > 0:
+            current_actual_rate = current_data.get('actual_fraud_rate', 0) * 100
+            current_predicted_rate = current_data.get('predicted_fraud_rate', 0) * 100
+
+            st.subheader(f"⚡ Current (Last {current_window_size:,} Txns)")
+
+            col_c, col_d = st.columns(2)
+            with col_c:
+                # Calculate delta vs cumulative if available
+                delta_vs_cumulative = None
+                if eval_cumulative and 'actual_fraud_rate' in eval_cumulative:
+                    cumulative_rate = eval_cumulative.get('actual_fraud_rate', 0) * 100
+                    delta_vs_cumulative = current_actual_rate - cumulative_rate
+
+                st.metric(
+                    label="Actual Fraud Rate",
+                    value=f"{current_actual_rate:.2f}%",
+                    delta=f"{delta_vs_cumulative:+.2f}% vs cumulative" if delta_vs_cumulative is not None else None,
+                    delta_color="inverse" if delta_vs_cumulative and delta_vs_cumulative > 0 else "normal",
+                    help="Ground truth fraud rate in the most recent window"
+                )
+
+            with col_d:
+                delta_pred_vs_actual = current_predicted_rate - current_actual_rate
+                st.metric(
+                    label="Predicted Fraud Rate",
+                    value=f"{current_predicted_rate:.2f}%",
+                    delta=f"{delta_pred_vs_actual:+.2f}%",
+                    help="Model's predicted fraud rate in the most recent window"
+                )
+
+            st.caption(f"Based on last {current_data.get('count', 0):,} labeled transactions")
+        else:
+            st.info(f"⏳ Waiting for {current_window_size:,} labeled transactions...")
+    else:
+        st.info("⏳ Select window sizes in sidebar to enable current fraud rate monitoring")
+
+st.divider()
+
+# ============================================================================
+# SECTION: Data Drift Detection
+# ============================================================================
+st.header("🔍 Data Drift Detection")
+st.caption("Monitors changes in feature distributions compared to training data")
+
+if drift_data and "drift_results" in drift_data and drift_data["drift_results"]:
+    # Alert if significant drift detected
+    num_drifted = drift_data.get("num_features_drifted", 0)
+    total_features = drift_data.get("total_features_monitored", 0)
+    should_retrain = drift_data.get("should_retrain", False)
+
+    if should_retrain:
+        st.error(f"⚠️ **Significant drift detected!** {num_drifted} out of {total_features} features have drifted. Model retraining recommended.")
+    elif num_drifted > 0:
+        st.warning(f"⚡ Moderate drift detected in {num_drifted} feature(s). Continue monitoring.")
+    else:
+        st.success(f"✅ No significant drift detected across {total_features} monitored features.")
+
+    # Summary metrics
+    col_drift1, col_drift2, col_drift3 = st.columns(3)
+
+    with col_drift1:
         st.metric(
-            label="📝 Total Transactions",
-            value=f"{summary_stats.get('total_transactions', 0):,}"
+            label="Features Monitored",
+            value=total_features
         )
 
-    with col2:
-        fraud_count = summary_stats.get('fraud_count', 0)
-        fraud_pct = summary_stats.get('fraud_percentage', 0)
+    with col_drift2:
         st.metric(
-            label="🚨 Fraud Detected",
-            value=f"{fraud_count:,}",
-            delta=f"{fraud_pct:.2f}%",
+            label="Features Drifted",
+            value=num_drifted,
+            delta=f"{(num_drifted/total_features*100):.1f}%" if total_features > 0 else "0%",
             delta_color="inverse"
         )
 
-    with col3:
-        avg_prob = summary_stats.get('avg_fraud_probability', 0)
+    with col_drift3:
         st.metric(
-            label="📈 Avg Fraud Probability",
-            value=f"{avg_prob:.3f}"
+            label="Window Size",
+            value=f"{drift_data.get('window_size', 0):,}"
         )
 
-    with col4:
-        high_risk = summary_stats.get('high_risk_count', 0)
-        st.metric(
-            label="⚠️ High Risk (>{:.0%})".format(high_risk_threshold),
-            value=f"{high_risk:,}",
-            delta_color="inverse"
-        )
+    # Drift results table
+    st.subheader("Drift Scores by Feature")
 
-st.divider()
+    # Prepare data for display
+    drift_results = drift_data["drift_results"]
+    drift_table_data = []
 
-# ============================================================================
-# PHASE 1: Real-Time Fraud Rate Gauge
-# ============================================================================
-col_gauge, col_pie = st.columns([1, 1])
+    for feature, result in sorted(drift_results.items(), key=lambda x: x[1]["drift_score"], reverse=True):
+        drift_table_data.append({
+            "Feature": feature,
+            "Type": result["type"].capitalize(),
+            "Drift Score": result["drift_score"],
+            "Status": "🔴 Drifted" if result["drifted"] else "🟢 OK",
+            "Drifted": result["drifted"]
+        })
 
-with col_gauge:
-    st.subheader("🎯 Current Fraud Rate")
-    if summary_stats:
-        fraud_rate = summary_stats.get('fraud_percentage', 0)
-        baseline_rate = 9.365  # From config
+    df_drift = pd.DataFrame(drift_table_data)
 
-        fig_gauge = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
-            value=fraud_rate,
-            domain={'x': [0, 1], 'y': [0, 1]},
-            title={'text': "Fraud Rate (%)"},
-            delta={'reference': baseline_rate, 'suffix': '%'},
-            gauge={
-                'axis': {'range': [None, 20]},
-                'bar': {'color': "darkred"},
-                'steps': [
-                    {'range': [0, 5], 'color': "lightgreen"},
-                    {'range': [5, 10], 'color': "yellow"},
-                    {'range': [10, 20], 'color': "red"}
-                ],
-                'threshold': {
-                    'line': {'color': "black", 'width': 4},
-                    'thickness': 0.75,
-                    'value': baseline_rate
-                }
-            }
-        ))
-        fig_gauge.update_layout(height=300)
-        st.plotly_chart(fig_gauge, use_container_width=True)
-    else:
-        st.info("Waiting for transaction data...")
+    # Color-code the table
+    def highlight_drift(row):
+        if row["Drifted"]:
+            return ['background-color: #ffcccc'] * len(row)  # Light red
+        else:
+            return ['background-color: #ccffcc'] * len(row)  # Light green
 
-# ============================================================================
-# PHASE 2: Fraud vs Non-Fraud Visualization
-# ============================================================================
-with col_pie:
-    st.subheader("📊 Fraud Distribution")
-    if summary_stats:
-        fraud_cnt = summary_stats.get('fraud_count', 0)
-        legit_cnt = summary_stats.get('legitimate_count', 0)
-
-        fig_pie = go.Figure(data=[go.Pie(
-            labels=['Legitimate', 'Fraud'],
-            values=[legit_cnt, fraud_cnt],
-            hole=.4,
-            marker=dict(colors=['#2ecc71', '#e74c3c'])
-        )])
-        fig_pie.update_layout(
-            height=300,
-            showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
-    else:
-        st.info("Waiting for transaction data...")
-
-st.divider()
-
-# ============================================================================
-# PHASE 1: Model Performance Metrics
-# ============================================================================
-st.header("🎓 Model Performance")
-
-if eval_metrics and eval_metrics.get('count', 0) > 0:
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    metrics_data = [
-        ("Accuracy", eval_metrics.get('accuracy', 0), col1),
-        ("Precision", eval_metrics.get('precision', 0), col2),
-        ("Recall", eval_metrics.get('recall', 0), col3),
-        ("F1 Score", eval_metrics.get('f1', 0), col4),
-        ("PR-AUC", eval_metrics.get('pr_auc', 0), col5)
-    ]
-
-    for label, value, col in metrics_data:
-        with col:
-            st.metric(label=label, value=f"{value:.3f}")
-
-    st.caption(f"📊 Evaluated on {eval_metrics.get('count', 0)} labeled transactions at threshold {fraud_threshold:.2f}")
-else:
-    st.info("Model evaluation metrics will appear once labeled transactions are available in Redis.")
-
-st.divider()
-
-# ============================================================================
-# PHASE 2: High-Risk Alerts
-# ============================================================================
-st.header("⚠️ High-Risk Alerts")
-
-if high_risk_data and high_risk_data.get('count', 0) > 0:
-    high_risk_transactions = high_risk_data.get('results', [])
-    st.warning(f"🚨 {len(high_risk_transactions)} high-risk transactions detected (fraud probability > {high_risk_threshold:.0%})")
-
-    df_high_risk = pd.DataFrame(high_risk_transactions)
-    df_high_risk['fraud_probability'] = df_high_risk['fraud_probability'].apply(safe_float)
-
-    # Display only key columns for alerts
-    alert_columns = ['transaction_id', 'fraud_probability', 'device_txn_velocity_24h',
-                     'ip_switched', 'fast_purchase', 'identity_changed']
-    display_cols = [col for col in alert_columns if col in df_high_risk.columns]
-
+    # Display styled dataframe
     st.dataframe(
-        df_high_risk[display_cols].sort_values('fraud_probability', ascending=False),
+        df_drift.drop(columns=["Drifted"]).style.apply(highlight_drift, axis=1).format({
+            "Drift Score": "{:.4f}"
+        }),
         use_container_width=True,
         hide_index=True
     )
-elif high_risk_data is None:
-    st.info("💡 High-risk alerts endpoint not yet implemented. Implement `/results/high-risk` to enable this feature.")
-else:
-    st.success("✅ No high-risk transactions detected.")
 
-st.divider()
+    # Drift score visualization
+    st.subheader("Drift Score Visualization")
 
-# ============================================================================
-# PHASE 2: Time-based Trend Charts
-# ============================================================================
-st.header("📈 Transaction Trends")
+    fig_drift = go.Figure()
 
-if hourly_stats and hourly_stats.get('hourly_stats'):
-    df_hourly = pd.DataFrame(hourly_stats['hourly_stats'])
-    df_hourly['hour'] = pd.to_datetime(df_hourly['hour'])
+    # Add bars for each feature
+    colors = ['#e74c3c' if row["Drifted"] else '#2ecc71' for _, row in df_drift.iterrows()]
 
-    col_trend1, col_trend2 = st.columns(2)
+    fig_drift.add_trace(go.Bar(
+        x=df_drift["Feature"],
+        y=df_drift["Drift Score"],
+        marker_color=colors,
+        text=df_drift["Drift Score"].round(4),
+        textposition='outside'
+    ))
 
-    with col_trend1:
-        st.subheader("Transaction Volume (Last 24 Hours)")
-        fig_volume = px.line(
-            df_hourly,
-            x='hour',
-            y='total_count',
-            labels={'total_count': 'Transactions', 'hour': 'Time'},
-            markers=True
-        )
-        fig_volume.update_traces(line_color='#3498db')
-        st.plotly_chart(fig_volume, use_container_width=True)
-
-    with col_trend2:
-        st.subheader("Fraud Rate Trend (Last 24 Hours)")
-        df_hourly['fraud_rate_pct'] = df_hourly['fraud_rate'] * 100
-        fig_fraud_rate = px.line(
-            df_hourly,
-            x='hour',
-            y='fraud_rate_pct',
-            labels={'fraud_rate_pct': 'Fraud Rate (%)', 'hour': 'Time'},
-            markers=True
-        )
-        fig_fraud_rate.update_traces(line_color='#e74c3c')
-        st.plotly_chart(fig_fraud_rate, use_container_width=True)
-else:
-    st.info("💡 Hourly trends endpoint not yet implemented. Implement `/stats/hourly` to enable this feature.")
-
-st.divider()
-
-# ============================================================================
-# PHASE 2: Feature Analysis Charts
-# ============================================================================
-st.header("🔍 Feature Analysis")
-
-if feature_stats:
-    fraud_features = feature_stats.get('fraud_features', {})
-    legit_features = feature_stats.get('legitimate_features', {})
-
-    # Top risk indicators comparison
-    st.subheader("Top Risk Indicators: Fraud vs Legitimate")
-
-    risk_features = ['ip_switched', 'sex_changed', 'identity_changed', 'fast_purchase',
-                     'device_txn_velocity_1h', 'device_txn_velocity_24h']
-
-    feature_comparison = []
-    for feature in risk_features:
-        if feature in fraud_features and feature in legit_features:
-            feature_comparison.append({
-                'Feature': feature,
-                'Fraud': fraud_features.get('feature', 0),
-                'Legitimate': legit_features.get('feature', 0)
-            })
-
-    if feature_comparison:
-        df_features = pd.DataFrame(feature_comparison)
-
-        fig_features = go.Figure(data=[
-            go.Bar(name='Fraud', x=df_features['Feature'], y=df_features['Fraud'], marker_color='#e74c3c'),
-            go.Bar(name='Legitimate', x=df_features['Feature'], y=df_features['Legitimate'], marker_color='#2ecc71')
-        ])
-        fig_features.update_layout(
-            barmode='group',
-            xaxis_title="Feature",
-            yaxis_title="Average Value",
-            height=400
-        )
-        st.plotly_chart(fig_features, use_container_width=True)
-    else:
-        st.info("No feature comparison data available.")
-else:
-    st.info("💡 Feature analysis endpoint not yet implemented. Implement `/stats/features` to enable this feature.")
-
-st.divider()
-
-# ============================================================================
-# PHASE 1: Enhanced Transaction Table with Filters
-# ============================================================================
-st.header("📋 Recent Transactions")
-
-if recent_transactions:
-    df = pd.DataFrame(recent_transactions)
-
-    # Convert columns to appropriate types
-    df['fraud_probability'] = df['fraud_probability'].apply(safe_float)
-    df['predicted_class'] = df['predicted_class'].apply(safe_int)
-
-    # Apply filters
-    if show_fraud_only:
-        df = df[df['predicted_class'] == 1]
-    elif show_legitimate_only:
-        df = df[df['predicted_class'] == 0]
-
-    # Filter by fraud threshold
-    threshold_filter = st.checkbox(f"Show only transactions above threshold ({fraud_threshold:.2f})", value=False)
-    if threshold_filter:
-        df = df[df['fraud_probability'] >= fraud_threshold]
-
-    # Display transaction count
-    st.caption(f"Showing {len(df)} transactions")
-
-    # Color-code the dataframe
-    def highlight_fraud(row):
-        if safe_int(row['predicted_class']) == 1:
-            return ['background-color: #ffcccc'] * len(row)  # Light red for fraud
-        else:
-            return ['background-color: #ccffcc'] * len(row)  # Light green for legitimate
-
-    # Select columns to display
-    display_columns = [
-        'transaction_id', 'fraud_probability', 'predicted_class',
-        'device_txn_velocity_24h', 'device_txn_velocity_1h',
-        'ip_switched', 'fast_purchase', 'identity_changed', 'sex_changed'
-    ]
-
-    # Only show columns that exist
-    available_columns = [col for col in display_columns if col in df.columns]
-
-    # Sort by fraud probability
-    df_display = df[available_columns].sort_values('fraud_probability', ascending=False)
-
-    # Apply styling and display
-    styled_df = df_display.style.apply(highlight_fraud, axis=1)
-    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=400)
-
-    # Download button
-    csv = df.to_csv(index=False)
-    st.download_button(
-        label="📥 Download Full Data as CSV",
-        data=csv,
-        file_name=f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv"
+    # Add threshold line
+    threshold = drift_data.get("threshold", 0.2)
+    fig_drift.add_hline(
+        y=threshold,
+        line_dash="dash",
+        line_color="orange",
+        annotation_text=f"Threshold ({threshold})",
+        annotation_position="right"
     )
 
+    fig_drift.update_layout(
+        xaxis_title="Feature",
+        yaxis_title="Jensen-Shannon Divergence",
+        height=400,
+        showlegend=False
+    )
+
+    st.plotly_chart(fig_drift, use_container_width=True)
+
+    # Additional info
+    with st.expander("ℹ️ About Drift Detection"):
+        st.markdown(f"""
+        **Jensen-Shannon Divergence** measures the difference between two probability distributions:
+        - **0.0** = Identical distributions (no drift)
+        - **1.0** = Completely different distributions (maximum drift)
+
+        **Interpretation:**
+        - JS < 0.1: No significant drift
+        - 0.1 ≤ JS < 0.2: Moderate drift (monitor)
+        - JS ≥ 0.2: Significant drift (consider retraining)
+
+        **Current Threshold:** {threshold}
+
+        **Baseline:** Training data from run `{drift_data.get('run_id', 'unknown')}`
+        """)
+
+elif drift_data and "message" in drift_data:
+    st.info(f"ℹ️ {drift_data['message']}")
 else:
-    st.info("No transactions processed yet. Start the producer and consumer services.")
+    st.warning("⏳ Drift monitoring data not available. Ensure model is trained and transactions are streaming.")
+
+st.divider()
+
+# ============================================================================
+# SECTION 1: Cumulative Model Performance (All Labeled Transactions)
+# ============================================================================
+st.header("📈 Cumulative Model Performance")
+st.caption("Performance metrics calculated on **all labeled transactions** since deployment")
+
+if eval_cumulative and eval_cumulative.get('count', 0) > 0:
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+
+    with col1:
+        st.metric(
+            label="📊 Labeled Txns",
+            value=f"{eval_cumulative.get('count', 0):,}"
+        )
+
+    with col2:
+        st.metric(
+            label="🎯 PR-AUC",
+            value=f"{eval_cumulative.get('pr_auc', 0):.3f}"
+        )
+
+    with col3:
+        st.metric(
+            label="✓ Precision",
+            value=f"{eval_cumulative.get('precision', 0):.3f}"
+        )
+
+    with col4:
+        st.metric(
+            label="↻ Recall",
+            value=f"{eval_cumulative.get('recall', 0):.3f}"
+        )
+
+    with col5:
+        st.metric(
+            label="⚖️ F1 Score",
+            value=f"{eval_cumulative.get('f1', 0):.3f}"
+        )
+
+    with col6:
+        st.metric(
+            label="📍 Accuracy",
+            value=f"{eval_cumulative.get('accuracy', 0):.3f}"
+        )
+
+    st.info(f"ℹ️ Threshold: {fraud_threshold:.2f} | Evaluated on all {eval_cumulative.get('count', 0):,} labeled transactions")
+
+else:
+    st.warning("⏳ Cumulative evaluation metrics will appear once labeled transactions are available in Redis.")
+
+st.divider()
+
+# ============================================================================
+# SECTION 2: Rolling Window Performance (Recent Transactions)
+# ============================================================================
+st.header("🔄 Rolling Window Performance")
+st.caption("Performance metrics calculated on **recent labeled transactions** (sliding window)")
+
+if not eval_rolling:
+    st.warning("⏳ Rolling window metrics will appear once enough labeled transactions are available.")
+else:
+    # Display metrics for each window size
+    for window_size in sorted(eval_rolling.keys()):
+        data = eval_rolling[window_size]
+
+        if data.get('count', 0) == 0:
+            st.info(f"Window {window_size:,}: Waiting for {window_size:,} labeled transactions...")
+            continue
+
+        st.subheader(f"Window: Last {window_size:,} Labeled Transactions")
+
+        col1, col2, col3, col4, col5 = st.columns(5)
+
+        with col1:
+            st.metric(
+                label="📊 Count",
+                value=f"{data.get('count', 0):,}"
+            )
+
+        with col2:
+            st.metric(
+                label="🎯 PR-AUC",
+                value=f"{data.get('pr_auc', 0):.3f}"
+            )
+
+        with col3:
+            st.metric(
+                label="✓ Precision",
+                value=f"{data.get('precision', 0):.3f}"
+            )
+
+        with col4:
+            st.metric(
+                label="↻ Recall",
+                value=f"{data.get('recall', 0):.3f}"
+            )
+
+        with col5:
+            st.metric(
+                label="⚖️ F1 Score",
+                value=f"{data.get('f1', 0):.3f}"
+            )
+
+        # Fraud rate comparison
+        col_fraud1, col_fraud2 = st.columns(2)
+
+        with col_fraud1:
+            actual_rate = data.get('actual_fraud_rate', 0) * 100
+            st.metric(
+                label="📉 Actual Fraud Rate",
+                value=f"{actual_rate:.2f}%",
+                help="Percentage of transactions that are actually fraudulent (ground truth)"
+            )
+
+        with col_fraud2:
+            predicted_rate = data.get('predicted_fraud_rate', 0) * 100
+            delta = predicted_rate - actual_rate
+            st.metric(
+                label="📈 Predicted Fraud Rate",
+                value=f"{predicted_rate:.2f}%",
+                delta=f"{delta:+.2f}% vs actual",
+                help="Percentage of transactions predicted as fraud by the model"
+            )
+
+        st.divider()
+
+# ============================================================================
+# SECTION 3: Performance Comparison Across Windows
+# ============================================================================
+if len(eval_rolling) > 1:
+    st.header("📊 Performance Comparison Across Windows")
+    st.caption("Compare model performance across different window sizes to detect drift")
+
+    # Prepare data for comparison
+    comparison_data = []
+    for window_size in sorted(eval_rolling.keys()):
+        data = eval_rolling[window_size]
+        if data.get('count', 0) > 0:
+            comparison_data.append({
+                'Window Size': f"{window_size:,}",
+                'Window': window_size,
+                'PR-AUC': data.get('pr_auc', 0),
+                'Precision': data.get('precision', 0),
+                'Recall': data.get('recall', 0),
+                'F1': data.get('f1', 0),
+                'Actual Fraud %': data.get('actual_fraud_rate', 0) * 100,
+                'Predicted Fraud %': data.get('predicted_fraud_rate', 0) * 100
+            })
+
+    if comparison_data:
+        df_comparison = pd.DataFrame(comparison_data)
+
+        # Metrics comparison chart
+        col_chart1, col_chart2 = st.columns(2)
+
+        with col_chart1:
+            st.subheader("Model Performance Metrics")
+            fig_metrics = go.Figure()
+
+            fig_metrics.add_trace(go.Bar(
+                name='PR-AUC',
+                x=df_comparison['Window Size'],
+                y=df_comparison['PR-AUC'],
+                marker_color='#3498db'
+            ))
+            fig_metrics.add_trace(go.Bar(
+                name='Precision',
+                x=df_comparison['Window Size'],
+                y=df_comparison['Precision'],
+                marker_color='#2ecc71'
+            ))
+            fig_metrics.add_trace(go.Bar(
+                name='Recall',
+                x=df_comparison['Window Size'],
+                y=df_comparison['Recall'],
+                marker_color='#e74c3c'
+            ))
+            fig_metrics.add_trace(go.Bar(
+                name='F1',
+                x=df_comparison['Window Size'],
+                y=df_comparison['F1'],
+                marker_color='#f39c12'
+            ))
+
+            fig_metrics.update_layout(
+                barmode='group',
+                xaxis_title="Window Size",
+                yaxis_title="Score",
+                yaxis_range=[0, 1],
+                height=400
+            )
+            st.plotly_chart(fig_metrics, use_container_width=True)
+
+        with col_chart2:
+            st.subheader("Fraud Rate Comparison")
+            fig_fraud = go.Figure()
+
+            fig_fraud.add_trace(go.Scatter(
+                name='Actual Fraud Rate',
+                x=df_comparison['Window Size'],
+                y=df_comparison['Actual Fraud %'],
+                mode='lines+markers',
+                marker=dict(size=10, color='#e74c3c'),
+                line=dict(width=3, color='#e74c3c')
+            ))
+            fig_fraud.add_trace(go.Scatter(
+                name='Predicted Fraud Rate',
+                x=df_comparison['Window Size'],
+                y=df_comparison['Predicted Fraud %'],
+                mode='lines+markers',
+                marker=dict(size=10, color='#3498db'),
+                line=dict(width=3, color='#3498db')
+            ))
+
+            fig_fraud.update_layout(
+                xaxis_title="Window Size",
+                yaxis_title="Fraud Rate (%)",
+                height=400
+            )
+            st.plotly_chart(fig_fraud, use_container_width=True)
+
+        # Detailed comparison table
+        with st.expander("📋 Detailed Metrics Table"):
+            st.dataframe(
+                df_comparison.style.format({
+                    'PR-AUC': '{:.3f}',
+                    'Precision': '{:.3f}',
+                    'Recall': '{:.3f}',
+                    'F1': '{:.3f}',
+                    'Actual Fraud %': '{:.2f}%',
+                    'Predicted Fraud %': '{:.2f}%'
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+
+        # Drift detection alert
+        if len(comparison_data) >= 2:
+            smallest_window = comparison_data[0]  # Most recent
+            largest_window = comparison_data[-1]  # Most historical
+
+            pr_auc_diff = smallest_window['PR-AUC'] - largest_window['PR-AUC']
+            fraud_rate_diff = smallest_window['Actual Fraud %'] - largest_window['Actual Fraud %']
+
+            if abs(pr_auc_diff) > 0.05 or abs(fraud_rate_diff) > 2.0:
+                st.warning(f"""
+                ⚠️ **Potential Drift Detected**
+                - PR-AUC change: {pr_auc_diff:+.3f} (smallest vs largest window)
+                - Fraud rate change: {fraud_rate_diff:+.2f}% (smallest vs largest window)
+
+                Consider retraining the model if performance continues to degrade.
+                """)
+
+st.divider()
 
 # ============================================================================
 # Footer
 # ============================================================================
-st.divider()
-st.caption("🔄 Auto-refreshing every {} seconds | Last update: {}".format(
-    REFRESH_INTERVAL,
-    datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-))
+st.caption(f"🔄 Auto-refreshing every {REFRESH_INTERVAL} seconds | Last update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+st.caption(f"💡 Threshold: {fraud_threshold:.2f} | Monitoring {len(window_sizes)} rolling window(s)")

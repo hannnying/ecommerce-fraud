@@ -132,19 +132,19 @@ class FraudDetectionModel:
         X_train_resampled_scaled = self.scaler.fit_transform(X_train_resampled)
 
         if logging:
+            # Log to the currently active MLflow run (started in train.py)
             mlflow.sklearn.autolog(log_models=False)
 
-            with mlflow.start_run() as run:
-                self.model.fit(X_train_resampled_scaled, y_train_resampled)
+            self.model.fit(X_train_resampled_scaled, y_train_resampled)
 
-                mlflow.sklearn.log_model(
-                    self.model,
-                    "model",
-                    registered_model_name="fraud_detection_model"
-                )
+            mlflow.sklearn.log_model(
+                self.model,
+                "model",
+                registered_model_name="fraud_detection_model"
+            )
 
-                run_id = run.info.run_id
-                print(f"Model loged and registered with run_id: {run_id}")
+            run_id = mlflow.active_run().info.run_id
+            print(f"Model logged and registered with run_id: {run_id}")
 
             mlflow_client = MlflowClient()
 
@@ -156,7 +156,7 @@ class FraudDetectionModel:
             )
 
             print(f"Model version {latest_version.version} promoted to Production")
-        
+
         else:
             self.model.fit(X_train_resampled_scaled, y_train_resampled)
 

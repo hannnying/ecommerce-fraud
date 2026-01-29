@@ -3,6 +3,8 @@ import argparse
 import json
 import pickle
 
+import mlflow
+from mlflow.tracking import MlflowClient
 import numpy as np
 import pandas as pd
 from src.config import (
@@ -14,8 +16,10 @@ from src.config import (
     RAW_DATA_PATH,
     START_IDX,
     TARGET_COL,
-    THRESHOLD
+    THRESHOLD,
+    categorical_features, numerical_features, boolean_features
 )
+from src.drift_monitor.drift_monitor import DriftMonitor
 from src.feature_engineering.engineer import TransactionFeatureEngineer
 from src.models.models import FraudDetectionModel
 from src.models.rule_based import RuleBasedModel
@@ -37,7 +41,6 @@ class Train:
             model_type="logistic_regression",
             custom_params={"penalty": "l2", "C": 2}
         )
-
 
     def train_pipeline(self, holdout=0.2):
         df = pd.read_csv(RAW_DATA_PATH)
@@ -105,7 +108,6 @@ class Train:
             if idx + 1 == INITIAL_START_IDX:
                 X_train = pd.DataFrame(processed_train)
                 y_train = np.array(y_train)
-                # self.model = 
                 self.model.fit(X_train, y_train, logging=False)
 
             if not idx % 1000:
@@ -118,10 +120,46 @@ class Train:
 
         # Train on holdout
         X_train_final = pd.DataFrame(processed_train)
-        y_train_final = np.concat([y_train, y_val], axis=0)
+        y_train_final = np.concatenate([y_train, y_val], axis=0)
 
-        # resample, scale, train and test on holdout
-        self.model.fit(X_train_final, np.array(y_train_final), logging=True)
+        # Start single MLflow run for model, drift references, and metadata
+        with mlflow.start_run() as run:
+            run_id = run.info.run_id
+            print(f"\n{'='*60}")
+            print(f"Started MLflow run: {run_id}")
+            print(f"{'='*60}\n")
+
+            # Log training metadata
+            mlflow.log_param("training_samples", len(X_train_final))
+            mlflow.log_param("holdout_ratio", holdout)
+            mlflow.log_param("fraud_rate", float(y_train_final.mean()))
+            mlflow.log_param("model_type", self.model.model_type)
+            mlflow.log_param("resampling_type", self.model.resampling_type)
+
+            # Log evaluation metrics
+            mlflow.log_metric("val_pr_auc", average_precision_score(y_val, y_val_proba_model))
+
+            # Train and log model (logs to current run)
+            print("Training and logging model...")
+            self.model.fit(X_train_final, np.array(y_train_final), logging=True)
+
+            # Build and log drift references (logs to current run)
+            print("Building and logging drift reference distributions...")
+            drift_monitor = DriftMonitor()
+            drift_monitor.build_data_reference(
+                df=X_train_final,
+                numerical_features=numerical_features,
+                categorical_features=categorical_features,
+                boolean_features=boolean_features,
+                logging=True
+            )
+
+            print(f"\n{'='*60}")
+            print(f"✅ All artifacts logged to run: {run_id}")
+            print(f"   - Model: fraud_detection_model")
+            print(f"   - Drift references: {len(self.model.scaler.numeric_features) + len(self.model.scaler.categorical_features) + len(self.model.scaler.boolean_features)} features")
+            print(f"   - Training metadata: samples, fraud_rate, etc.")
+            print(f"{'='*60}\n")
 
         # save states
         self.device_state.export_to_file(DEVICE_STATE_PATH)
@@ -133,7 +171,7 @@ class Train:
             pickle.dump(self.model.scaler, p)
             print(f"preprocessor saved at: {PREPROCESSOR_PATH}")
 
-        model_path = MODELS_DIR / f"{self.model.model_type}.pkl"
+        model_path = MODELS_DIR / f"{self.model.model_type}_10K.pkl"
         with open(model_path, "wb") as m:
             pickle.dump(self.model.model, m)
             print(f"model saved at: {model_path}")

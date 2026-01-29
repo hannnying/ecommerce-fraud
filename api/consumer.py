@@ -212,7 +212,7 @@ class InferenceConsumer:
 
 if __name__=="__main__":
 
-    model_path = MODELS_DIR / "logistic_regression.pkl"
+    model_path = MODELS_DIR / "logistic_regression_10K.pkl"
     # This URI always points to the latest model in Production stage.
     # When training with logging=True (training/train.py), new models are automatically
     # registered and promoted to Production (see src/models/models.py:149-158).
@@ -224,4 +224,11 @@ if __name__=="__main__":
         model_uri="models:/fraud_detection_model/Production",
         model_path=model_path
     )
+
+    # inference_consumer = InferenceConsumer(
+    #     preprocessor_path=PREPROCESSOR_PATH,
+    #     model_uri=None,
+    #     model_path=model_path
+    # )
+
     inference_consumer.start_consuming()

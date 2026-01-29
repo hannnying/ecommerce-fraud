@@ -39,6 +39,20 @@ TEST_DATA_PATH = DATA_DIR / "test.csv"
 RAW_TRAIN_PATH = DATA_DIR / "raw_train.csv"
 RAW_TEST_PATH = DATA_DIR / "raw_test.csv"
 
+# Features
+numerical_features = ['device_txn_idx', 'device_time_since_last_s',
+                      'device_age_hours', 'identity_counts',
+                      'device_txn_velocity_1h', 'device_txn_velocity_24h',
+                        'time_setup_to_txn_seconds',
+                        'global_txn_velocity_1h',
+                        'global_txn_velocity_24h',
+                        'device_txn_share_24h']
+
+categorical_features = []
+
+boolean_features = ['first_device_txn', 'signup_before_first_device_txn', 'ip_switched', 'repeated_device_purchase', 'fast_purchase']
+
+
 # ============================================================================
 # Model Paths (constants)
 # ============================================================================
@@ -66,9 +80,9 @@ RANDOM_STATE = 0
 TEST_SIZE = 0.2
 CV_FOLDS = 5
 OPTIMIZATION_METRIC = "recall"
-THRESHOLD = 0.4
+THRESHOLD = 0.6
 
-START_IDX = 120000
+START_IDX = 2000
 
 # ============================================================================
 # API Configuration (constants with sensible defaults)
@@ -92,7 +106,7 @@ RESULT_STREAM = "results_stream"
 REDIS_BLOCK_TIMEOUT = int(os.getenv("REDIS_BLOCK_TIMEOUT", 5000)) # milliseconds
 BUCKET_SIZE_SECONDS = 60
 
-REDIS_STATE_DIR = PROJECT_ROOT / "redis_saved_state"
+REDIS_STATE_DIR = PROJECT_ROOT / "redis_saved_state_10k"
 DEVICE_STATE_PATH = REDIS_STATE_DIR / "device_state.pkl"
 GLOBAL_BUCKETS_PATH = REDIS_STATE_DIR / "global_buckets.pkl"
 IP_STATE_PATH = REDIS_STATE_DIR / "ip_state.pkl"
