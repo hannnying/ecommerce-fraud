@@ -159,6 +159,7 @@ class DriftMonitor:
 
         # Handle None values by converting to empty lists
         categorical_features = categorical_features or []
+        categorical_features.append("rule_label")
         boolean_features = boolean_features or []
         numerical_features = numerical_features or []
 
@@ -168,8 +169,8 @@ class DriftMonitor:
         for bool in boolean_features:
             self.build_categorical_feature_reference(df, bool, logging)
 
-        for num in numerical_features:
-            self.build_numerical_feature_reference(df, num, logging)
+        # for num in numerical_features:
+        #     self.build_numerical_feature_reference(df, num, logging)
 
         # Log summary
         total_features = len(categorical_features) + len(boolean_features) + len(numerical_features)

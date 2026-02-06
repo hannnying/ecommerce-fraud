@@ -39,18 +39,111 @@ TEST_DATA_PATH = DATA_DIR / "test.csv"
 RAW_TRAIN_PATH = DATA_DIR / "raw_train.csv"
 RAW_TEST_PATH = DATA_DIR / "raw_test.csv"
 
-# Features
-numerical_features = ['device_txn_idx', 'device_time_since_last_s',
-                      'device_age_hours', 'identity_counts',
-                      'device_txn_velocity_1h', 'device_txn_velocity_24h',
-                        'time_setup_to_txn_seconds',
-                        'global_txn_velocity_1h',
-                        'global_txn_velocity_24h',
-                        'device_txn_share_24h']
+# ============================================================================
+# Feature Definitions
+# ============================================================================
 
-categorical_features = []
+# All numerical features (continuous values)
+numerical_features = [
+    'device_txn_idx',
+    'device_time_since_last_s',
+    'device_age_hours',
+    'device_txn_velocity_24h',
+    'global_txn_velocity_24h',
+    'country_txn_velocity_24h',
+    'time_setup_to_txn_seconds',
+    'purchase_hour',
+    'amount_per_age'
+]
 
-boolean_features = ['first_device_txn', 'signup_before_first_device_txn', 'ip_switched', 'repeated_device_purchase', 'fast_purchase']
+# All categorical features (discrete categories)
+categorical_features = [
+    'source',
+    'browser'
+]
+
+# All boolean features (stored as int 0/1)
+boolean_features = [
+    'signup_before_first_device_txn',
+    'repeated_device_purchase',
+    'purchase_spike',
+    'identity_changed',
+    'prev_is_fraud',
+    'is_late_night',
+    'under_18',
+    '18_25',
+    '26_35',
+    '36_50',
+    '50_above',
+    'unknown_country'
+]
+
+# ============================================================================
+# Model-Specific Feature Sets
+# ============================================================================
+
+# SEEN DEVICES MODEL
+# For transactions from devices with historical data
+# Includes device-specific features that require transaction history
+seen_device_numerical_features = [
+    'device_txn_idx',
+    'device_time_since_last_s',
+    'device_age_hours',
+    'global_txn_velocity_24h',
+    'country_txn_velocity_24h'
+]
+
+seen_device_boolean_features = [
+    'repeated_device_purchase',
+    'purchase_spike',
+    'identity_changed',
+    'prev_is_fraud'
+]
+
+seen_device_categorical_features = [
+    'source',
+    'browser'
+]
+
+# All features for seen device model
+seen_device_features = (
+    seen_device_numerical_features +
+    seen_device_boolean_features +
+    seen_device_categorical_features
+)
+
+# UNSEEN/NEW DEVICES MODEL
+# For transactions from new devices without historical data
+# Uses only transaction-level features that don't require device history
+unseen_device_numerical_features = [
+    'purchase_hour',
+    'amount_per_age'
+]
+
+unseen_device_boolean_features = [
+    'is_late_night',
+    'under_18',
+    '18_25',
+    '26_35',
+    '36_50',
+    '50_above',
+    'unknown_country'
+]
+
+unseen_device_categorical_features = [
+    'source',
+    'browser'
+]
+
+# All features for unseen device model
+unseen_device_features = (
+    unseen_device_numerical_features +
+    unseen_device_boolean_features +
+    unseen_device_categorical_features
+)
+
+# Combined feature list (all features)
+all_features = list(set(numerical_features + categorical_features + boolean_features))
 
 
 # ============================================================================
@@ -106,7 +199,7 @@ RESULT_STREAM = "results_stream"
 REDIS_BLOCK_TIMEOUT = int(os.getenv("REDIS_BLOCK_TIMEOUT", 5000)) # milliseconds
 BUCKET_SIZE_SECONDS = 60
 
-REDIS_STATE_DIR = PROJECT_ROOT / "redis_saved_state_10k"
+REDIS_STATE_DIR = PROJECT_ROOT / "redis_saved_state"
 DEVICE_STATE_PATH = REDIS_STATE_DIR / "device_state.pkl"
 GLOBAL_BUCKETS_PATH = REDIS_STATE_DIR / "global_buckets.pkl"
 IP_STATE_PATH = REDIS_STATE_DIR / "ip_state.pkl"

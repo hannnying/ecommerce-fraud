@@ -15,13 +15,23 @@ class GlobalVelocity:
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
         self.bucket_size_seconds = BUCKET_SIZE_SECONDS
 
-    def update_global_bucket(self, purchase_time):
+    def update_bucket(self, purchase_time: datetime, country: str) -> None:
         current_bucket = int(purchase_time.timestamp() // self.bucket_size_seconds)
+
+        self.update_country_bucket(country, current_bucket)
+        self.update_global_bucket(current_bucket)
+
+    def update_country_bucket(self, country: str, current_bucket: int) -> None:
+        country_bucket_key = f"{country}:txn_count:bucket:{current_bucket}"
+        self.client.incr(country_bucket_key)
+        self.client.expire(country_bucket_key, 25 * 3600)
+
+    def update_global_bucket(self, current_bucket: int) -> None:
         bucket_key = f"global:txn_count:bucket:{current_bucket}"
         self.client.incr(bucket_key)
         self.client.expire(bucket_key, 25 * 3600)
 
-    def get_global_txn_velocity(self, purchase_time, time_window):
+    def get_txn_velocity(self, purchase_time: datetime, time_window: str, country: str = None):
         if time_window == "1h":
             num_buckets = 3600 // self.bucket_size_seconds
 
@@ -30,29 +40,31 @@ class GlobalVelocity:
 
         else:
             raise ValueError(f"{time_window} not supported")
-
-
+        
         current_bucket = int(purchase_time.timestamp() // self.bucket_size_seconds)
         total = 0
 
         for i in range(num_buckets):
             bucket_id = current_bucket - i
-            bucket_key = f"global:txn_count:bucket:{bucket_id}"
+            if country:
+                bucket_key = f"{country}:txn_count:bucket:{bucket_id}"
+            else:
+                bucket_key = f"global:txn_count:bucket:{bucket_id}"
             count = self.client.get(bucket_key)
-            total += int(count) if count else 0
+            total += int(count) if count else 0 
 
         return total
 
     def count_buckets(self) -> int:
-        """Count total number of global buckets stored in Redis."""
+        """Count total number of buckets (global and country-specific) stored in Redis."""
         count = 0
-        for _ in self.client.scan_iter("global:txn_count:bucket:*", count=1000):
+        for _ in self.client.scan_iter("*:txn_count:bucket:*", count=1000):
             count += 1
         return count
 
     def export_to_file(self, filepath: str) -> None:
         """
-        Export all global velocity buckets from Redis to a pickle file.
+        Export all velocity buckets (global and country-specific) from Redis to a pickle file.
 
         Args:
             filepath: Path to save the state file (e.g., 'models/global_buckets.pkl')
@@ -67,22 +79,20 @@ class GlobalVelocity:
         filepath = Path(filepath)
         filepath.parent.mkdir(parents=True, exist_ok=True)
 
-        print(f"Exporting global velocity buckets to {filepath}...")
+        print(f"Exporting velocity buckets to {filepath}...")
 
         # Export all bucket keys and their counts
-        global_buckets = {}
+        # Store as full keys to preserve global vs country distinction
+        all_buckets = {}
         bucket_count = 0
 
-        for key in self.client.scan_iter("global:txn_count:bucket:*", count=1000):
+        for key in self.client.scan_iter("*:txn_count:bucket:*", count=1000):
             key_str = key if isinstance(key, str) else key.decode('utf-8')
-
-            # Extract bucket_id from key (format: global:txn_count:bucket:{bucket_id})
-            bucket_id = key_str.split(":")[-1]
 
             # Get the count for this bucket
             count = self.client.get(key_str)
             if count:
-                global_buckets[bucket_id] = int(count)
+                all_buckets[key_str] = int(count)
                 bucket_count += 1
 
             if bucket_count % 1000 == 0:
@@ -90,12 +100,12 @@ class GlobalVelocity:
 
         # Save to file
         export_data = {
-            "global_buckets": global_buckets,
+            "buckets": all_buckets,
             "metadata": {
                 "export_time": datetime.now().isoformat(),
                 "bucket_count": bucket_count,
                 "bucket_size_seconds": self.bucket_size_seconds,
-                "type": "global_velocity"
+                "type": "velocity_buckets"
             }
         }
 
@@ -103,18 +113,18 @@ class GlobalVelocity:
             pickle.dump(export_data, f)
 
         file_size_mb = filepath.stat().st_size / (1024 * 1024)
-        print(f"  ✓ Exported {bucket_count} global velocity buckets ({file_size_mb:.2f} MB)")
-        print(f"✓ Global velocity export complete")
+        print(f"  ✓ Exported {bucket_count} velocity buckets ({file_size_mb:.2f} MB)")
+        print(f"✓ Velocity buckets export complete")
 
     @classmethod
     def load_from_file(cls, filepath: str, flush_existing: bool = False) -> 'GlobalVelocity':
         """
-        Load global velocity buckets from a pickle file and restore to Redis.
+        Load velocity buckets (global and country-specific) from a pickle file and restore to Redis.
 
         Args:
             filepath: Path to the state file (e.g., 'models/global_buckets.pkl')
-            flush_existing: Whether to flush existing global buckets in Redis before loading
-                          (default True - ensures clean state)
+            flush_existing: Whether to flush existing buckets in Redis before loading
+                          (default False - preserves existing state)
 
         Returns:
             GlobalVelocity instance with loaded state
@@ -128,16 +138,16 @@ class GlobalVelocity:
         if not filepath.exists():
             raise FileNotFoundError(f"State file not found: {filepath}")
 
-        print(f"Loading global velocity buckets from {filepath}...")
+        print(f"Loading velocity buckets from {filepath}...")
 
         # Create instance
         instance = cls()
 
-        # Flush existing global buckets if requested
+        # Flush existing buckets if requested
         if flush_existing:
-            print("  Flushing existing global buckets from Redis...")
+            print("  Flushing existing buckets from Redis...")
             deleted_count = 0
-            for key in instance.client.scan_iter("global:txn_count:bucket:*", count=1000):
+            for key in instance.client.scan_iter("*:txn_count:bucket:*", count=1000):
                 instance.client.delete(key)
                 deleted_count += 1
             if deleted_count > 0:
@@ -147,14 +157,21 @@ class GlobalVelocity:
         with open(filepath, 'rb') as f:
             export_data = pickle.load(f)
 
-        global_buckets = export_data.get("global_buckets", {})
+        # Try new format first (with full keys), then fall back to old format
+        buckets = export_data.get("buckets")
+        if buckets is None:
+            # Old format - only had global buckets
+            print("  ⚠ Loading from old format (global buckets only)")
+            buckets = {}
+            for bucket_id, count in export_data.get("global_buckets", {}).items():
+                buckets[f"global:txn_count:bucket:{bucket_id}"] = count
+
         bucket_count = 0
 
-        for bucket_id, count in global_buckets.items():
-            bucket_key = f"global:txn_count:bucket:{bucket_id}"
+        for bucket_key, count in buckets.items():
             instance.client.set(bucket_key, count)
 
-            # Set TTL to 25 hours (same as in update_global_bucket)
+            # Set TTL to 25 hours (same as in update methods)
             instance.client.expire(bucket_key, 25 * 3600)
 
             bucket_count += 1
@@ -166,26 +183,26 @@ class GlobalVelocity:
         export_time = metadata.get("export_time", "unknown")
         bucket_size = metadata.get("bucket_size_seconds", "unknown")
 
-        print(f"  ✓ Loaded {bucket_count} global velocity buckets")
+        print(f"  ✓ Loaded {bucket_count} velocity buckets")
         print(f"    Exported at: {export_time}")
         print(f"    Bucket size: {bucket_size} seconds")
-        print(f"✓ Global velocity state loaded successfully")
+        print(f"✓ Velocity state loaded successfully")
 
         return instance
 
     def clear_all_buckets(self) -> int:
         """
-        Clear all global velocity buckets from Redis.
+        Clear all velocity buckets (global and country-specific) from Redis.
 
         Returns:
             Number of keys deleted
 
-        WARNING: This deletes all global velocity data. Use with caution.
+        WARNING: This deletes all velocity data. Use with caution.
         """
         deleted_count = 0
-        for key in self.client.scan_iter("global:txn_count:bucket:*", count=1000):
+        for key in self.client.scan_iter("*:txn_count:bucket:*", count=1000):
             self.client.delete(key)
             deleted_count += 1
 
-        print(f"Cleared {deleted_count} global bucket keys from Redis")
+        print(f"Cleared {deleted_count} bucket keys from Redis")
         return deleted_count

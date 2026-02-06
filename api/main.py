@@ -160,6 +160,7 @@ async def evaluate_rolling(
     threshold: float = 0.45,
     redis_client: Redis = Depends(get_redis_client)
 ):
+    """Evaluate model performance of past window_size transactions."""
     fetch_size = window_size * 3
     entries = redis_client.xrevrange(RESULT_STREAM, count=fetch_size)
     
@@ -228,12 +229,161 @@ async def evaluate_rolling(
     except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     
+@app.get("/transactions/analyse")
+async def get_transactions_to_analyse(
+    threshold_seen: float = 0.4,
+    threshold_unseen: float = 0.1,
+    threshold_rules: float = 0.8,
+    limit: int = 1000,
+    redis_client: Redis = Depends(get_redis_client)
+):
+    """Retrieve transactions that require anaysis based on model-specific thresholds."""
+
+    risky_transactions = []
+    seen_count = 0
+    unseen_count = 0
+    rules_count = 0
+
+    try:
+        entries = redis_client.xrevrange(RESULT_STREAM, count=limit * 3)
+
+        if not entries:
+            return {
+                "total_count": 0,
+                "seen_count": 0,
+                "unseen_count": 0,
+                "rules_count": 0,
+                "transactions": [],
+                "message": "No transactions available"
+            }
+
+        else:
+
+            for stream_id, data in entries:
+                fraud_proba = float(data.get("fraud_proba"))
+                model_used = data.get("model_used")
+
+                # Determine if transaction exceeds threshold for its model
+                should_analyze = False
+                if model_used == "seen_devices" and fraud_proba >= threshold_seen:
+                    should_analyze = True
+                    seen_count += 1
+                elif model_used == "unseen_devices" and fraud_proba >= threshold_unseen:
+                    should_analyze = True
+                    unseen_count += 1
+                elif model_used == "rule_based" and fraud_proba >= threshold_rules:
+                    should_analyze = True
+                    rules_count += 1
+                
+                if not should_analyze:
+                    continue
+
+                else:
+                    # can add additional fields next time
+                    risky_transaction = {
+                        "transaction_id": data.get("transaction_id"),
+                        "device_id": data.get("device_id"),
+                        "purchase_time": data.get("purchase_time"),
+                        "risk_score": fraud_proba,
+                        "model_used": model_used,
+                        "purchase_value": data.get("purchase_value"),
+                        "device_txn_idx": data.get("device_txn_idx"),
+                        "source": data.get("source"),
+                        "browser": data.get("browser")
+                    }
+                    risky_transactions.append(risky_transaction)
+
+        return {
+            "total_count": len(risky_transactions),
+            "seen_count": seen_count,
+            "unseen_count": unseen_count,
+            "rules_count": rules_count,
+            "transactions": risky_transactions,
+            "thresholds": {
+                "seen_devices": threshold_seen,
+                "unseen_devices": threshold_unseen,
+                "rule_based": threshold_rules
+            }
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/evaluate/business")
+def evaluate_business_value(
+    window_size: int = 5000,
+    threshold_seen: float = 0.4,
+    threshold_unseen: float = 0.1,
+    threshold_rules: float = 0.8,
+    redis_client: Redis = Depends(get_redis_client)
+):
+    """Evaluate system performance based on purchase_value of transactions, assuming that all transactions raised for review are eventually correctly classified."""
+    
+    total_transaction_value = 0
+    fraud_caught_value = 0
+    missed_fraud_value = 0
+    genuine_value = 0
+
+    try:
+        entries = redis_client.xrevrange(RESULT_STREAM, count=window_size) 
+        
+        if not entries:
+            pass
+
+        else:
+            for stream_id, data in entries:
+                transaction_id = data.get("transaction_id")
+                purchase_value = int(data.get("purchase_value"))
+                fraud_proba = float(data.get("fraud_proba"))
+                model_used = data.get("model_used")
+
+                prediction_key = f"predictions:{transaction_id}"
+                true_label = int(redis_client.get(prediction_key, "true_label"))
+
+                if true_label == -1: # label has not arrived
+                    continue
+
+                # Determine if transaction exceeds threshold for its model
+                should_analyze = False
+                if model_used == "seen_devices" and fraud_proba >= threshold_seen:
+                    should_analyze = True
+                elif model_used == "unseen_devices" and fraud_proba >= threshold_unseen:
+                    should_analyze = True
+                elif model_used == "rule_based" and fraud_proba >= threshold_rules:
+                    should_analyze = True
+
+                if should_analyze: # assume all analysed transactions are correctly classified
+                    if true_label == 1:
+                        fraud_caught_value += purchase_value
+                    else:
+                        genuine_value += purchase_value
+                else:
+                    if true_label == 1:
+                        missed_fraud_value += purchase_value
+                    else:
+                        genuine_value += purchase_value
+
+                total_transaction_value += purchase_value
+
+            return {
+                "total_transaction_value": total_transaction_value,
+                "fraud_caught_value": fraud_caught_value,
+                "genuine_value": genuine_value,
+                "missed_fraud_value": missed_fraud_value
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))   
+        
+
 @app.get("/drift/check")
 def check_drift(
     window_size: int = 5000,
     drift_threshold: float = 0.2,
     redis_client: Redis = Depends(get_redis_client)
 ):
+    """Compare distribution of last window_size transactions with transactions used in training."""
     
     try:
         entries = redis_client.xrevrange(RESULT_STREAM, count=window_size)
@@ -248,27 +398,11 @@ def check_drift(
         transactions = []
 
         for stream_id, data in entries:
-            transaction = {
-                # Numerical features
-                "device_txn_idx": data.get("device_txn_idx"),
-                "device_time_since_last_s": data.get("device_time_since_last_s"),
-                "device_age_hours": data.get("device_age_hours"),
-                "identity_counts": data.get("identity_counts"),
-                "device_txn_velocity_1h": data.get("device_txn_velocity_1h"),
-                "device_txn_velocity_24h": data.get("device_txn_velocity_24h"),
-                "time_setup_to_txn_seconds": data.get("time_setup_to_txn_seconds"),
-                "global_txn_velocity_1h": data.get("global_txn_velocity_1h"),
-                "global_txn_velocity_24h": data.get("global_txn_velocity_24h"),
-                "device_txn_share_24h": data.get("device_txn_share_24h"),
+            transaction = {}
 
-                # Boolean features
-                "first_device_txn": data.get("first_device_txn"),
-                "signup_before_first_device_txn": data.get("signup_before_first_device_txn"),
-                "ip_switched": data.get("ip_switched"),
-                "repeated_device_purchase": data.get("repeated_device_purchase"),
-                "fast_purchase": data.get("fast_purchase")
-            }
-            transactions.append(transaction)
+            for feature in categorical_features + boolean_features + ["rule_label"]:
+                transaction[feature] = data.get(feature)
+                transactions.append(transaction)
 
         current_df = pd.DataFrame(transactions)
 
@@ -308,7 +442,7 @@ def check_drift(
                 print(f"Error checking drift for {feature}: {e}")                          
                 continue
 
-        for feature in boolean_features:
+        for feature in boolean_features + ["rule_label"]:
             if feature not in current_df.columns:
                 continue
 
@@ -357,7 +491,7 @@ def check_drift(
             "threshold": drift_threshold,
             "run_id": run_id,
             "drift_results": drift_results,
-            "num_features_drifted": sum(1 for r in drift_results if r["drifted"]),
+            "num_features_drifted": sum(1 for r in drift_results.values() if r["drifted"]),
             "total_features_monitored": len(drift_results)
         }
         

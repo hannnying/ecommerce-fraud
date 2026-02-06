@@ -1,6 +1,7 @@
 import os
 import time
 import mlflow
+from mlflow.tracking import MlflowClient
 import pandas as pd
 import pickle
 from redis import Redis
@@ -15,20 +16,20 @@ from src.config import (
     REDIS_HOST,
     REDIS_PORT,
     RESULT_STREAM,
-    TRANSACTION_STREAM
+    TRANSACTION_STREAM,
+    seen_device_features,
+    unseen_device_features
 )
-from src.feature_engineering.engineer import TransactionFeatureEngineer
+from src.feature_engineering.engineer_flexible import TransactionFeatureEngineer
 from src.models.rule_based import RuleBasedModel
-from src.state.device_state import DeviceState
+from src.state.device_state_flexible import DeviceState
 from src.state.global_bucket import GlobalVelocity
 from src.state.ip_state import IPState
 from src.state.prediction_store import PredictionStore
 
 
 class InferenceConsumer:
-    def __init__(self, preprocessor_path, model_uri, model_path):
-        self.preprocessor = None
-        self.model = None
+    def __init__(self, seen_model_uri=None, unseen_model_uri=None):
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
         self.device_state = None
         self.feature_engineer = TransactionFeatureEngineer()
@@ -37,9 +38,14 @@ class InferenceConsumer:
         self.prediction_store = PredictionStore()
         self.rule_based_model = RuleBasedModel()
 
+        # Two models: one for seen devices, one for unseen
+        self.seen_model = None
+        self.seen_preprocessor = None
+        self.unseen_model = None
+        self.unseen_preprocessor = None
+
         self._initialize_redis()
-        self._initialize_preprocessor(preprocessor_path)
-        self._initialize_model(model_uri, model_path)
+        self._initialize_models(seen_model_uri, unseen_model_uri)
 
     def _initialize_redis(self):
         print(f"Loading device state, global buckets and ip state")
@@ -49,35 +55,114 @@ class InferenceConsumer:
         self.ip_state = IPState.load_from_file(IP_STATE_PATH)
 
 
-    def _initialize_preprocessor(self, preprocessor_path):
+    def _initialize_models(self, seen_model_uri=None, unseen_model_uri=None):
+        """
+        Load both models (seen and unseen devices) from MLflow or local files.
+
+        Args:
+            seen_model_uri: MLflow URI for seen devices model (e.g., "models:/fraud_detection_seen_devices@Production")
+            unseen_model_uri: MLflow URI for unseen devices model (e.g., "models:/fraud_detection_unseen_devices@Production")
+        """
+        print("Loading fraud detection models...")
+
+        # Load SEEN DEVICES model
+        self._load_model_pair(
+            model_name="seen_devices",
+            model_uri=seen_model_uri or "models:/fraud_detection_seen_devices@Production"
+        )
+
+        # Load UNSEEN DEVICES model
+        self._load_model_pair(
+            model_name="unseen_devices",
+            model_uri=unseen_model_uri or "models:/fraud_detection_unseen_devices@Production"
+        )
+
+        print("✓ Both models loaded successfully\n")
+
+    def _load_model_pair(self, model_name, model_uri):
+        """
+        Load a model and its preprocessor from MLflow or local files.
+
+        Args:
+            model_name: 'seen_devices' or 'unseen_devices'
+            model_uri: MLflow URI for the model
+        """
+        model_path = MODELS_DIR / f"{model_name}_model.pkl"
+        preprocessor_path = MODELS_DIR / f"{model_name}_preprocessor.pkl"
+
+        # Try loading MODEL from MLflow first
+        print(f"  Loading {model_name} model from MLflow: {model_uri}")
+        model_from_mlflow = False
         try:
-            with open(preprocessor_path, "rb") as p:
-                self.preprocessor = pickle.load(p)
+            model = mlflow.sklearn.load_model(model_uri)
+            print(f"  ✓ Loaded {model_name} model from MLflow")
+            model_from_mlflow = True
 
-            print(f"Loaded preprocessor at {preprocessor_path} into InferenceConsumer")
-        except Exception as e:
-            print(f"Error loading preprocessor: {e}")
-
-
-    def _initialize_model(self, model_uri, model_path=MODELS_DIR / "logistic_regression.pkl"):
-        print(f"Loading model from MLflow Registry: {model_uri}")
-        try:
-            self.model = mlflow.sklearn.load_model(model_uri)
         except Exception as mlflow_error:
-            print(f"Failed to load from MLflow: {mlflow_error}")
-            print(f"Falling back to local model at {model_path}")
+            print(f"  ⚠ Failed to load model from MLflow: {mlflow_error}")
+            print(f"  Falling back to local model: {model_path}")
 
             try:
-                with open(model_path, "rb") as m:
-                    self.model = pickle.load(m)
-                print(f"Loaded model at {model_path} into InferenceConsumer")
-                    
+                with open(model_path, "rb") as f:
+                    model = pickle.load(f)
+                print(f"  ✓ Loaded {model_name} model from local file")
+
             except Exception as local_error:
                 raise RuntimeError(
-                    f"Failed to load model from MLflow and local path.\n"
+                    f"Failed to load {model_name} model from MLflow and local path.\n"
                     f"MLflow error: {mlflow_error}\n"
                     f"Local error: {local_error}"
-            )
+                )
+
+        # Try loading PREPROCESSOR from MLflow (if model came from MLflow)
+        preprocessor = None
+        if model_from_mlflow:
+            try:
+                # Get the run_id from the model URI
+                client = MlflowClient()
+
+                # Parse model name from URI
+                registry_model_name = model_uri.split("/")[1].split("@")[0]
+
+                # Get the latest version with the specified alias
+                alias = model_uri.split("@")[1] if "@" in model_uri else "Production"
+                model_version = client.get_model_version_by_alias(registry_model_name, alias)
+                run_id = model_version.run_id
+
+                # Download preprocessor artifact from that run
+                artifact_path = f"preprocessor/{model_name}_preprocessor.pkl"
+                preprocessor_uri = f"runs:/{run_id}/{artifact_path}"
+
+                import tempfile
+                import os
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    local_path = mlflow.artifacts.download_artifacts(preprocessor_uri, dst_path=tmpdir)
+                    with open(local_path, "rb") as f:
+                        preprocessor = pickle.load(f)
+
+                print(f"  ✓ Loaded {model_name} preprocessor from MLflow")
+
+            except Exception as mlflow_preprocessor_error:
+                print(f"  ⚠ Failed to load preprocessor from MLflow: {mlflow_preprocessor_error}")
+                print(f"  Falling back to local preprocessor")
+
+        # Load preprocessor from local file if not loaded from MLflow
+        if preprocessor is None:
+            try:
+                with open(preprocessor_path, "rb") as f:
+                    preprocessor = pickle.load(f)
+                print(f"  ✓ Loaded {model_name} preprocessor from local file")
+
+            except Exception as e:
+                raise RuntimeError(f"Failed to load {model_name} preprocessor: {e}")
+
+        # Assign to instance variables
+        if model_name == "seen_devices":
+            self.seen_model = model
+            self.seen_preprocessor = preprocessor
+        elif model_name == "unseen_devices":
+            self.unseen_model = model
+            self.unseen_preprocessor = preprocessor
 
 
     def handle_transaction(self, transaction_dict):
@@ -87,7 +172,7 @@ class InferenceConsumer:
         """
         device_id = transaction_dict["device_id"]
 
-        processed_transaction, transaction_id, device_data = self.feature_engineer.compute_features(
+        processed_transaction, transaction_id,(device_id, state_update) = self.feature_engineer.compute_features(
             transaction_dict,
             training=False,
             transaction_id=None
@@ -95,48 +180,40 @@ class InferenceConsumer:
 
         processed_transaction_pred = self.predict_transaction(processed_transaction)
 
-        device_id, txn_count, purchase_value, sex, age, purchase_time, signup_time, ip_address, txn_count, first_seen_signup, first_seen, identities, purchase_values = device_data
-
+        # add transaction_id, device_id to processed_transaction_pred
+        processed_transaction_pred["transaction_id"] = transaction_dict["transaction_id"]
+        processed_transaction_pred["device_id"] = device_id
+        processed_transaction_pred["purchase_value"] = transaction_dict["purchase_value"]
+        
         self.device_state.update_device_state(
-            device_id,
-            purchase_value,
-            sex,
-            age,
-            purchase_time,
-            signup_time,
-            ip_address,
-            txn_count,
-            first_seen_signup,
-            first_seen,
-            identities,
-            purchase_values
+            device_id=device_id,
+            state_updates=state_update
         )
 
-        self.device_state.update_device_timestamp(device_id, transaction_id, purchase_time)
-        self.global_velocity.update_global_bucket(purchase_time)
-        self.ip_state.update_ip_txn_idx(ip_address)
+
+        self.device_state.update_device_timestamp(device_id, transaction_id, state_update["last_seen"])
+        self.global_velocity.update_global_bucket(state_update["last_seen"])
 
         print(f"processed transaction: {transaction_id}")
 
         # add processed transaction df to results stream
-        self.store_result(transaction_id, device_id, purchase_time, processed_transaction_pred)
+        self.store_result(processed_transaction_pred)
 
     
     def handle_label(self, label_dict):
         """
+        Update hash storing past transaction predictions with label, and update prev_is_fraud of device_state.
         Join label into hash storing past transaction predictions, and update fraud_count of device state. 
         """
         
+        print(f"received label of: {label_dict}")
         transaction_id = label_dict["transaction_id"]
         device_id = label_dict["device_id"]
         is_fraud = label_dict["is_fraud"]
 
         self.prediction_store.update_label(transaction_id, is_fraud)
+        self.device_state.update_prev_is_fraud(device_id, is_fraud)
 
-        # # look for device record with device_id in hash
-        # self.device_state.update_fraud_count(device_id, is_fraud)
-        
-        print(f"processed label: {transaction_id}")
 
     def start_consuming(self):
         """
@@ -172,63 +249,80 @@ class InferenceConsumer:
     def predict_transaction(self, processed_transaction):
         """
         Predict whether transaction is fraudulent or not.
+        Automatically selects the correct model based on device_txn_idx.
         """
-        
+
         rule_based_label = self.rule_based_model.predict(processed_transaction)
-        
-        if rule_based_label == -1: # 
-            processed_transaction_df = pd.DataFrame([processed_transaction])
 
-            # scale
-            scaled_processed_transaction_df = self.preprocessor.transform(processed_transaction_df)
+        if rule_based_label == -1:  # No rule triggered, use ML model
+            # Determine which model to use based on device transaction index
+            device_txn_idx = processed_transaction.get("device_txn_idx", 1)
+            is_new_device = device_txn_idx == 1
 
-            # Add predictions to processed transaction dict
-            processed_transaction["predicted_class"] = int(self.model.predict(scaled_processed_transaction_df)[0]) # customise this if you want a custom threshold
-            processed_transaction["fraud_probability"] = float(self.model.predict_proba(scaled_processed_transaction_df)[0, 1])
-        
+            if is_new_device:
+                # Use UNSEEN DEVICES model
+                model = self.unseen_model
+                preprocessor = self.unseen_preprocessor
+                features = unseen_device_features
+                model_used = "unseen_devices"
+                
+            else:
+                # Use SEEN DEVICES model
+                model = self.seen_model
+                preprocessor = self.seen_preprocessor
+                features = seen_device_features
+                model_used = "seen_devices"
+
+            processed_transaction_df = pd.DataFrame([processed_transaction])[features]
+
+            # quick fix for encoding before resamplign during model training
+            for col in preprocessor.feature_names:
+                if col not in processed_transaction_df.columns:
+                    processed_transaction_df[col] = 0
+
+            # Scale
+            scaled_processed_transaction_df = preprocessor.transform(processed_transaction_df)
+
+            # Predict
+            processed_transaction["fraud_proba"] = float(model.predict_proba(scaled_processed_transaction_df)[0, 1])
+            processed_transaction["model_used"] = model_used
+
         else:
-            processed_transaction["predicted_class"] = rule_based_label
-            processed_transaction["fraud_probability"] = 0.99 if rule_based_label == 1 else 0.01
+            # Rule-based prediction
+            processed_transaction["fraud_proba"] = 0.99 if rule_based_label == 1 else 0.01
+            processed_transaction["model_used"] = "rule_based"
         
+        processed_transaction["true_label"] = -1 # label hasn't arrived
+
         return processed_transaction
 
     
-    def store_result(self, transaction_id, device_id, purchase_time, processed_transaction):
+    def store_result(self, processed_transaction):
         """
         Store prediction results:
         1. Append immutable prediction event to RESULT_STREAM
         2. Persist mutable prediction record in Redis hash (for label join & evaluation)
         """
 
-        processed_transaction_dict = self.prediction_store.serialize_processed_transaction(transaction_id, purchase_time, processed_transaction)
-        
+        serialized_processed_transaction = self.prediction_store.update_predictions(processed_transaction)
         # append immutable prediction event to RESULT_STREAM
-        self.client.xadd(RESULT_STREAM, processed_transaction_dict)
+        self.client.xadd(RESULT_STREAM, serialized_processed_transaction)
 
-        # persist mutable prediction record in Redis hash
-        self.prediction_store.update_predictions(device_id, processed_transaction_dict)
-
-        
 
 if __name__=="__main__":
-
-    model_path = MODELS_DIR / "logistic_regression_10K.pkl"
-    # This URI always points to the latest model in Production stage.
-    # When training with logging=True (training/train.py), new models are automatically
-    # registered and promoted to Production (see src/models/models.py:149-158).
-    # MLflow's Production stage reference is updated dynamically, ensuring this loads the latest promoted model.
-    model_uri = "models:/fraud_detection_model/Production"
+    # MLflow URIs for both models
+    # These URIs point to the latest Production versions
+    # Models are registered during training (see training/train.py)
+    seen_model_uri = "models:/fraud_detection_seen_devices@Production"
+    unseen_model_uri = "models:/fraud_detection_unseen_devices@Production"
 
     inference_consumer = InferenceConsumer(
-        preprocessor_path=PREPROCESSOR_PATH,
-        model_uri="models:/fraud_detection_model/Production",
-        model_path=model_path
+        seen_model_uri=seen_model_uri,
+        unseen_model_uri=unseen_model_uri
     )
 
-    # inference_consumer = InferenceConsumer(
-    #     preprocessor_path=PREPROCESSOR_PATH,
-    #     model_uri=None,
-    #     model_path=model_path
-    # )
+    # If MLflow is not available, it will automatically fall back to local files:
+    # - models/seen_devices_model.pkl + models/seen_devices_preprocessor.pkl
+    # - models/unseen_devices_model.pkl + models/unseen_devices_preprocessor.pkl
 
     inference_consumer.start_consuming()
