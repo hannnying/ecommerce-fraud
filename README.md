@@ -1,3 +1,21 @@
+# Current State (More in DRIFT_AND_RETRAINING.md)
+
+Currently, the model is trained on the first 120,000 transactions, while the remaining 30,000 transactions are streamed, and use the trained model to predict whether they are fraudulent or not.
+
+The model is a hybrid-model, consisting of a rule-based classifier and a Logistic Regression model that was trained on the first 120,000 transactions. The rule-based classifer acts as a filter, whereby if a transaction fits any of the criteria, it will be given a label. Transactions that do not pass this filter will be classified by the Logistic Regression model. 
+
+While this hybrid approach is able to catch ~60% of fraud in the WHOLE dataset (), the rules overfit the earlier data. 40% of the first 20,000 transactions could be classified by the rule-based classifier, while only classifying 0.276% of the remaining transactions. Notably, while `fast_purchase` = `time_between_signup_purchase` <= 60 is a crucial characteristic of fraudulent transactions, subsequent transactions no longer behave this way, this is known as data drift. 
+
+Additionally, in January, about 70% of the transactions were fraudulent, whereas from Febraury - December, 4.5% - 7% of the transaction were fraudulent. Hence, there is also a need to address label drift. 
+
+The key changes to be made in this version aim to address data and label drift with ML monitoring, and they include:
+1. Offline ML training on initial 10,000 transactions for the initial ML model.
+2. Streaming from the 10,001st transaction through Redis.
+3. Consumer runs inference on each streamed transaction, and labels arrive after (configurable) each transaction via LABELS_STREAM.
+4. Performance monitoring on labelled transactions (and distribution of key model input features) 
+5. Periodic retraining
+
+
 # E-commerce Fraud Detection Project
 
 ```text

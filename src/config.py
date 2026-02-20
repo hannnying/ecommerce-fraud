@@ -40,6 +40,113 @@ RAW_TRAIN_PATH = DATA_DIR / "raw_train.csv"
 RAW_TEST_PATH = DATA_DIR / "raw_test.csv"
 
 # ============================================================================
+# Feature Definitions
+# ============================================================================
+
+# All numerical features (continuous values)
+numerical_features = [
+    'device_txn_idx',
+    'device_time_since_last_s',
+    'device_age_hours',
+    'device_txn_velocity_24h',
+    'global_txn_velocity_24h',
+    'country_txn_velocity_24h',
+    'time_setup_to_txn_seconds',
+    'purchase_hour',
+    'amount_per_age'
+]
+
+# All categorical features (discrete categories)
+categorical_features = [
+    'source',
+    'browser'
+]
+
+# All boolean features (stored as int 0/1)
+boolean_features = [
+    'signup_before_first_device_txn',
+    'repeated_device_purchase',
+    'purchase_spike',
+    'identity_changed',
+    'prev_is_fraud',
+    'is_late_night',
+    'under_18',
+    '18_25',
+    '26_35',
+    '36_50',
+    '50_above',
+    'unknown_country'
+]
+
+# ============================================================================
+# Model-Specific Feature Sets
+# ============================================================================
+
+# SEEN DEVICES MODEL
+# For transactions from devices with historical data
+# Includes device-specific features that require transaction history
+seen_device_numerical_features = [
+    'device_txn_idx',
+    'device_time_since_last_s',
+    'device_age_hours',
+    'global_txn_velocity_24h',
+    'country_txn_velocity_24h'
+]
+
+seen_device_boolean_features = [
+    'repeated_device_purchase',
+    'purchase_spike',
+    'identity_changed',
+    'prev_is_fraud'
+]
+
+seen_device_categorical_features = [
+    'source',
+    'browser'
+]
+
+# All features for seen device model
+seen_device_features = (
+    seen_device_numerical_features +
+    seen_device_boolean_features +
+    seen_device_categorical_features
+)
+
+# UNSEEN/NEW DEVICES MODEL
+# For transactions from new devices without historical data
+# Uses only transaction-level features that don't require device history
+unseen_device_numerical_features = [
+    'purchase_hour',
+    'amount_per_age'
+]
+
+unseen_device_boolean_features = [
+    'is_late_night',
+    'under_18',
+    '18_25',
+    '26_35',
+    '36_50',
+    '50_above',
+    'unknown_country'
+]
+
+unseen_device_categorical_features = [
+    'source',
+    'browser'
+]
+
+# All features for unseen device model
+unseen_device_features = (
+    unseen_device_numerical_features +
+    unseen_device_boolean_features +
+    unseen_device_categorical_features
+)
+
+# Combined feature list (all features)
+all_features = list(set(numerical_features + categorical_features + boolean_features))
+
+
+# ============================================================================
 # Model Paths (constants)
 # ============================================================================
 MODELS_DIR = PROJECT_ROOT / "models"
@@ -66,9 +173,9 @@ RANDOM_STATE = 0
 TEST_SIZE = 0.2
 CV_FOLDS = 5
 OPTIMIZATION_METRIC = "recall"
-THRESHOLD = 0.4
+THRESHOLD = 0.6
 
-START_IDX = 120000
+START_IDX = 2000
 
 # ============================================================================
 # API Configuration (constants with sensible defaults)

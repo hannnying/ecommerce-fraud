@@ -1,14 +1,14 @@
+"""
+Flexible, schema-driven DeviceState implementation.
+When you change DEVICE_STATE_SCHEMA, serialization automatically adapts.
+"""
 from datetime import datetime
-import json
 from pathlib import Path
 import pickle
 import pandas as pd
 from redis import Redis
-from src.config import(
-   REDIS_DB,
-   REDIS_HOST,
-   REDIS_PORT
-)
+from src.config import REDIS_DB, REDIS_HOST, REDIS_PORT
+from src.state.device_schema import DEVICE_STATE_SCHEMA, get_field_names, get_default_state
 
 
 class DeviceState:
@@ -16,135 +16,119 @@ class DeviceState:
     def __init__(self):
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 
-    def update_device_state(
-        self,
-        device_id,
-        purchase_value,
-        sex,
-        age,
-        purchase_time,
-        signup_time,
-        ip_address,
-        txn_count,
-        first_seen_signup,
-        first_seen,
-        identities,
-        purchase_values
-    ):
-        """Update device state."""
+    def update_device_state(self, device_id: str, state_updates: dict):
+        """
+        Update device state with provided fields.
 
+        Args:
+            device_id: Device identifier
+            state_updates: Dict of fields to update (e.g., {"txn_count": 5, "last_seen": datetime.now()})
+
+        Example:
+            device_state.update_device_state("device123", {
+                "txn_count": txn_count + 1,
+                "last_seen": purchase_time,
+                "prev_ip": ip_address
+            })
+        """
         key = f"device:{device_id}"
 
-        identities.add(sex + str(age))
-        purchase_values.append(purchase_value)
+        # Get current state
+        current_state = self.get_device_state(device_id)
 
-        updated_state = {
-            "txn_count": txn_count + 1,
-            "first_seen_signup": signup_time if not first_seen_signup else first_seen_signup,
-            "first_seen": purchase_time if not first_seen else first_seen,
-            "last_seen": purchase_time,
-            "prev_ip": ip_address,
-            "identities": identities,
-            "purchase_values": purchase_values
-        }
+        # Merge updates
+        current_state.update(state_updates)
 
+        # Serialize and save
+        self.client.hset(key, mapping=self._serialize_state(current_state))
 
-        self.client.hset(
-            key, 
-            mapping=self.serialize_device_state(
-                updated_state["txn_count"], 
-                updated_state["first_seen_signup"],
-                updated_state["first_seen"],
-                updated_state["last_seen"],
-                updated_state["prev_ip"],
-                updated_state["identities"],
-                updated_state["purchase_values"]
-            )
-        )
-        
-
-    def update_device_timestamp(self, device_id, transaction_id, purchase_time):
+    def update_device_timestamp(self, device_id: str, transaction_id: str, purchase_time: datetime):
+        """Update device transaction velocity tracking."""
         key = f"device:{device_id}:txn_timestamp"
-        
+
         self.client.zadd(key, mapping={transaction_id: purchase_time.timestamp()})
 
-        # remove timestamps > 24 hours
+        # Remove timestamps > 24 hours
         timestamp_threshold = (purchase_time - pd.Timedelta(days=1)).timestamp()
         self.client.zremrangebyscore(key, float("-inf"), timestamp_threshold)
 
-
-    def serialize_device_state(self, txn_count, first_seen_signup, first_seen, last_seen, prev_ip, identities, purchase_values):
-        if type(first_seen_signup) != str:
-            first_seen_signup = first_seen_signup.isoformat()
-
-        if type(first_seen) != str:
-            first_seen = first_seen.isoformat()
+    def update_prev_is_fraud(self, device_id: str, label: int) -> None:
+        """Update prev_is_fraud of device_state"""
         
-        if type(last_seen) != str:
-            last_seen = last_seen.isoformat()
-        
-        return {
-            "txn_count": txn_count,
-            "first_seen_signup": first_seen_signup,
-            "first_seen": first_seen,
-            "last_seen": last_seen,
-            "prev_ip": float(prev_ip),
-            "identities": json.dumps(list(identities)),
-            "purchase_values": json.dumps(purchase_values)
-        }
+        key = f"device:{device_id}"
+        self.client.hset(key, "prev_is_fraud", label)
 
+    def _serialize_state(self, state: dict) -> dict:
+        """
+        Serialize state dict for Redis storage.
+        Uses DEVICE_STATE_SCHEMA to determine how each field is serialized.
+        """
+        serialized = {}
+        for field, field_type in DEVICE_STATE_SCHEMA.items():
+            if field in state:
+                serialized[field] = field_type.serialize(state[field])
+        return serialized
 
-    def deserialize_device_state(self, raw):
-        txn_count = int(raw[0]) if raw[0] else 0
-        first_seen_signup = datetime.fromisoformat(raw[1]) if raw[1] else None
-        first_seen = datetime.fromisoformat(raw[2]) if raw[2] else None
-        last_seen = datetime.fromisoformat(raw[3]) if raw[3] else None
-        prev_ip = float(raw[4]) if raw[4] else None
-        identities = set(json.loads(raw[5])) if raw[5] else set()
-        purchase_values = list(json.loads(raw[6])) if raw[6] else []
+    def _deserialize_state(self, raw: dict) -> dict:
+        """
+        Deserialize state dict from Redis.
+        Uses DEVICE_STATE_SCHEMA to determine how each field is deserialized.
+        """
+        deserialized = {}
+        for field, field_type in DEVICE_STATE_SCHEMA.items():
+            raw_value = raw.get(field)
+            deserialized[field] = field_type.deserialize(raw_value)
+        return deserialized
 
-        return txn_count, first_seen_signup, first_seen, last_seen, prev_ip, identities, purchase_values
+    def get_device_state(self, device_id: str) -> dict:
+        """
+        Get device state as a dict.
 
-    def get_device_state(self, device_id):
+        Returns:
+            Dict with all fields from DEVICE_STATE_SCHEMA.
+            For new devices, returns default values.
+
+        Example:
+            state = device_state.get_device_state("device123")
+            txn_count = state["txn_count"]
+            last_seen = state.get("last_seen")
+        """
         key = f"device:{device_id}"
 
-        raw = self.client.hmget(
-            key,
-            "txn_count",
-            "first_seen_signup",
-            "first_seen",
-            "last_seen",
-            "prev_ip",
-            "identities",
-            "purchase_values",
-        )
+        # Get all fields from Redis
+        raw = self.client.hgetall(key)
 
-        return self.deserialize_device_state(raw)
-    
+        if not raw:
+            # New device - return defaults
+            return get_default_state(DEVICE_STATE_SCHEMA)
 
-    def get_device_txn_velocity(self, device_id, purchase_time, time_window):
+        return self._deserialize_state(raw)
+
+    def get_device_txn_velocity(self, device_id: str, purchase_time: datetime, time_window: str) -> int:
+        """Get transaction count within time window."""
         key = f"device:{device_id}:txn_timestamp"
 
         if time_window == "1m":
             timestamp_threshold = purchase_time - pd.Timedelta(1, "m")
-        if time_window == "5m":
+        elif time_window == "5m":
             timestamp_threshold = purchase_time - pd.Timedelta(5, "m")
-        if time_window == "1h":
+        elif time_window == "1h":
             timestamp_threshold = purchase_time - pd.Timedelta(1, "h")
-        if time_window == "24h":
+        elif time_window == "24h":
             timestamp_threshold = purchase_time - pd.Timedelta(1, "d")
+        else:
+            raise ValueError(f"Invalid time_window: {time_window}")
 
         min_score = timestamp_threshold.timestamp()
         max_score = purchase_time.timestamp()
 
         return self.client.zcount(key, min_score, max_score)
-        
+
     def count_devices(self) -> int:
         """Count total number of devices stored in Redis."""
         count = 0
-        for _ in self.client.scan_iter("device:*", count=1000):
-            # Don't count timestamp sorted sets, only device hashes
-            if ":txn_timestamp" not in _:
+        for key in self.client.scan_iter("device:*", count=1000):
+            if ":txn_timestamp" not in key:
                 count += 1
         return count
 
@@ -160,9 +144,6 @@ class DeviceState:
             filepath: Path to save device hashes (e.g., 'models/device_state.pkl')
             export_timestamps: Whether to also export device timestamp sorted sets
                                 to a separate file (default True)
-
-        Returns:
-            None
 
         Example:
             device_state = DeviceState()
@@ -198,7 +179,8 @@ class DeviceState:
             "metadata": {
                 "export_time": datetime.now().isoformat(),
                 "device_count": device_count,
-                "type": "device_hashes"
+                "type": "device_hashes",
+                "schema_fields": get_field_names(DEVICE_STATE_SCHEMA)
             }
         }
 
@@ -222,7 +204,7 @@ class DeviceState:
 
                 # Get all transaction timestamps for this device (last 24h)
                 timestamps = self.client.zrange(key_str, 0, -1, withscores=True)
-                if timestamps:  # Only store if device has timestamps
+                if timestamps:
                     device_timestamps[device_id] = timestamps
                     timestamp_count += 1
 
@@ -252,24 +234,15 @@ class DeviceState:
         """
         Load device state from pickle file(s) and restore to Redis.
 
-        Loads device hashes from the specified filepath and optionally loads
-        timestamps from the companion timestamp file.
-
         Args:
             filepath: Path to device hashes file (e.g., 'models/device_state.pkl')
             load_timestamps: Whether to also load device timestamps from companion file
-                           (default True - loads from 'models/device_timestamps.pkl')
             flush_existing: Whether to flush existing device state in Redis before loading
-                          (default True - ensures clean state)
 
         Returns:
             DeviceState instance with loaded state
 
         Example:
-            # Load only device hashes (fast startup)
-            device_state = DeviceState.load_from_file('models/device_state.pkl', load_timestamps=False)
-
-            # Load device hashes and timestamps (complete state)
             device_state = DeviceState.load_from_file('models/device_state.pkl', load_timestamps=True)
         """
         filepath = Path(filepath)
@@ -309,6 +282,21 @@ class DeviceState:
 
         metadata = export_data.get("metadata", {})
         export_time = metadata.get("export_time", "unknown")
+        schema_fields = metadata.get("schema_fields", [])
+
+        # Warn if schema has changed
+        current_fields = set(get_field_names(DEVICE_STATE_SCHEMA))
+        saved_fields = set(schema_fields) if schema_fields else current_fields
+
+        if saved_fields != current_fields:
+            print(f"  ⚠ Schema mismatch detected:")
+            added = current_fields - saved_fields
+            removed = saved_fields - current_fields
+            if added:
+                print(f"    New fields (will use defaults): {added}")
+            if removed:
+                print(f"    Removed fields (will be ignored): {removed}")
+
         print(f"  ✓ Loaded {device_count} device hashes (exported at: {export_time})")
 
         # Load device timestamps from separate file if requested
@@ -327,7 +315,6 @@ class DeviceState:
                 for device_id, timestamps in device_timestamps.items():
                     key = f"device:{device_id}:txn_timestamp"
 
-                    # timestamps is a list of (transaction_id, score) tuples
                     if timestamps:
                         mapping = {txn_id: score for txn_id, score in timestamps}
                         instance.client.zadd(key, mapping=mapping)

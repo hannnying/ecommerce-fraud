@@ -1,3 +1,4 @@
+import pandas as pd
 import pickle 
 from imblearn.combine import SMOTEENN
 from imblearn.over_sampling import SMOTE
@@ -10,7 +11,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
-from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import cross_val_score, GridSearchCV
 from src.preprocessing import FraudDataPreprocessor
 import joblib
 
@@ -18,7 +19,7 @@ import joblib
 
 class FraudDetectionModel:
 
-    def __init__(self, resampling_type='random_undersampling', scaler_path=None, model_type='logistic_regression', custom_params=None):
+    def __init__(self, resampling_type=None, scaler_path=None, model_type='logistic_regression', custom_params=None, model_name=None):
         """
         Initialize fraud detection model with resampling technique.
 
@@ -27,6 +28,7 @@ class FraudDetectionModel:
             scaler_path (str): Path of fitted scaler. If None, initialise with FraudDataPreprocessor
             model_type (str): Type of model: 'logistic_regression', 'random_forest', 'xgboost'
             custom_params (dict): Custom hyperparameters to override defaults
+            model_name (str): Name for the model (e.g., 'seen_devices', 'unseen_devices')
 
         """
 
@@ -38,9 +40,11 @@ class FraudDetectionModel:
         self.model = None
         self.params = None
         self.feature_importance_ = None
+        self.model_name = model_name or model_type  # Default to model_type if no name given
 
         # Initialize resampling used
-        self._initialize_resampling()
+        if self.resampling_type:
+            self._initialize_resampling()
 
         # Initialize scaler
         self._initialize_scaler()
@@ -124,44 +128,75 @@ class FraudDetectionModel:
         -------
         self
         """
-        print(f"Resampling and Fitting model on {len(X_train)} samples")
+        if self.resampler:
+            print(f"Resampling and Fitting model on {len(X_train)} samples")
 
-        X_train_resampled, y_train_resampled = self.resampler.fit_resample(X_train, y_train)
-        print(f"Resampling resulted in: {len(X_train_resampled)}")
+            # need to encode categorical variables before resampling, dangerous way of encoding > resampling
+            X_train = pd.get_dummies(X_train)
+            
+            X_train, y_train = self.resampler.fit_resample(X_train, y_train)
+            print(f"Resampling resulted in: {len(X_train)}")
 
-        X_train_resampled_scaled = self.scaler.fit_transform(X_train_resampled)
+        # scale regardless of whether resampling is used
+        X_train_scaled = self.scaler.fit_transform(X_train)
 
         if logging:
+            # Log to the currently active MLflow run (started in train.py)
             mlflow.sklearn.autolog(log_models=False)
 
-            with mlflow.start_run() as run:
-                self.model.fit(X_train_resampled_scaled, y_train_resampled)
+            cv_scores = cross_val_score(self.model, X_train_scaled, y_train, cv=5, scoring="average_precision")
+            print(f"Avergae PR-AUC: {cv_scores.mean()}")
+            
+            self.model.fit(X_train_scaled, y_train)
 
-                mlflow.sklearn.log_model(
-                    self.model,
-                    "model",
-                    registered_model_name="fraud_detection_model"
-                )
+            # Use model_name for registration (e.g., "seen_devices", "unseen_devices")
+            registered_name = f"fraud_detection_{self.model_name}"
 
-                run_id = run.info.run_id
-                print(f"Model loged and registered with run_id: {run_id}")
+            # Log the trained model
+            mlflow.sklearn.log_model(
+                self.model,
+                "model",
+                registered_model_name=registered_name
+            )
+
+            # Log the preprocessor as a separate artifact
+            import tempfile
+            import os
+            with tempfile.TemporaryDirectory() as tmpdir:
+                preprocessor_path = os.path.join(tmpdir, f"{self.model_name}_preprocessor.pkl")
+                with open(preprocessor_path, "wb") as f:
+                    pickle.dump(self.scaler, f)
+                mlflow.log_artifact(preprocessor_path, "preprocessor")
+                print(f"Preprocessor logged to MLflow for '{registered_name}'")
+
+            run_id = mlflow.active_run().info.run_id
+            print(f"Model '{registered_name}' logged and registered with run_id: {run_id}")
 
             mlflow_client = MlflowClient()
 
-            latest_version = mlflow_client.get_latest_versions("fraud_detection_model", stages=["None"])[0]
-            mlflow_client.transition_model_version_stage(
-                name="fraud_detection_model",
-                version=latest_version.version,
-                stage="Production"
+            # Get the latest registered version
+            latest_versions = mlflow_client.search_model_versions(
+                filter_string=f"name='{registered_name}'",
+                order_by=["version_number DESC"],
+                max_results=1
             )
+            if latest_versions:
+                latest_version = latest_versions[0]
+                # Set alias (new MLflow approach)
+                mlflow_client.set_registered_model_alias(
+                    name=registered_name,
+                    alias="Production",
+                    version=latest_version.version
+                )
+                print(f"Model '{registered_name}' version {latest_version.version} set to Production alias")
+            else:
+                print(f"Warning: Could not find registered model version for '{registered_name}'")
 
-            print(f"Model version {latest_version.version} promoted to Production")
-        
         else:
-            self.model.fit(X_train_resampled_scaled, y_train_resampled)
+            self.model.fit(X_train_scaled, y_train)
 
         # Extract feature importance
-        self._extract_feature_importance(X_train_resampled)
+        self._extract_feature_importance(X_train_scaled)
 
         return self
 
@@ -201,7 +236,6 @@ class FraudDetectionModel:
 
     def _extract_feature_importance(self, X_train):
         """Extract feature importance based on model type."""
-        import pandas as pd
 
         feature_names = X_train.columns if hasattr(X_train, 'columns') else [f'feature_{i}' for i in range(X_train.shape[1])]
 
@@ -238,38 +272,90 @@ class FraudDetectionModel:
 
         return self.feature_importance_.head(top_n)
 
-    def save(self, filepath):
+    def save(self, models_dir=None):
         """
-        Save model to disk.
+        Save model and preprocessor to disk with model_name.
 
         Parameters
         ----------
-        filepath : str
-            Path to save the model
+        models_dir : Path or str
+            Directory to save models (uses MODELS_DIR from config if None)
+
+        Returns
+        -------
+        dict
+            Paths where model and preprocessor were saved
         """
-        joblib.dump(self.model, filepath)
-        print(f"Model saved to {filepath}")
+        from pathlib import Path
+        from src.config import MODELS_DIR
+
+        models_dir = Path(models_dir) if models_dir else MODELS_DIR
+        models_dir.mkdir(exist_ok=True, parents=True)
+
+        # Save model with name
+        model_path = models_dir / f"{self.model_name}_model.pkl"
+        with open(model_path, "wb") as f:
+            pickle.dump(self.model, f)
+        print(f"✓ Model saved: {model_path}")
+
+        # Save preprocessor with name
+        preprocessor_path = models_dir / f"{self.model_name}_preprocessor.pkl"
+        with open(preprocessor_path, "wb") as f:
+            pickle.dump(self.scaler, f)
+        print(f"✓ Preprocessor saved: {preprocessor_path}")
+
+        return {
+            "model_path": model_path,
+            "preprocessor_path": preprocessor_path
+        }
 
     @classmethod
-    def load(cls, filepath, model_type='logistic_regression'):
+    def load(cls, model_name, models_dir=None):
         """
-        Load model from disk.
+        Load model and preprocessor from disk by name.
 
         Parameters
         ----------
-        filepath : str
-            Path to load the model from
-        model_type : str
-            Type of model being loaded
+        model_name : str
+            Name of the model (e.g., 'seen_devices', 'unseen_devices')
+        models_dir : Path or str
+            Directory to load from (uses MODELS_DIR from config if None)
 
         Returns
         -------
         FraudDetectionModel
-            Loaded model instance
+            Loaded model instance with preprocessor
+
+        Example
+        -------
+        >>> seen_model = FraudDetectionModel.load('seen_devices')
+        >>> unseen_model = FraudDetectionModel.load('unseen_devices')
         """
-        instance = cls(model_type=model_type)
-        instance.model = joblib.load(filepath)
-        print(f"Model loaded from {filepath}")
+        from pathlib import Path
+        from src.config import MODELS_DIR
+
+        models_dir = Path(models_dir) if models_dir else MODELS_DIR
+
+        # Load model
+        model_path = models_dir / f"{model_name}_model.pkl"
+        preprocessor_path = models_dir / f"{model_name}_preprocessor.pkl"
+
+        if not model_path.exists():
+            raise FileNotFoundError(f"Model not found: {model_path}")
+        if not preprocessor_path.exists():
+            raise FileNotFoundError(f"Preprocessor not found: {preprocessor_path}")
+
+        # Create instance
+        instance = cls(model_name=model_name)
+
+        # Load model and preprocessor
+        with open(model_path, "rb") as f:
+            instance.model = pickle.load(f)
+        with open(preprocessor_path, "rb") as f:
+            instance.scaler = pickle.load(f)
+
+        print(f"✓ Loaded model '{model_name}' from {models_dir}")
+
         return instance
 
 

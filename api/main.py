@@ -1,10 +1,25 @@
 from collections import defaultdict
 from datetime import datetime, timedelta
 from fastapi import Depends, FastAPI, HTTPException
+import mlflow
+from mlflow.tracking import MlflowClient
 import numpy as np
 import pandas as pd
 from redis import Redis
-from sklearn.metrics import accuracy_score, f1_score, precision_score, average_precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    confusion_matrix,
+    f1_score,
+    precision_score, 
+    recall_score
+)
+from src.config import (
+    numerical_features,
+    categorical_features,
+    boolean_features
+)
+from src.drift_monitor.drift_monitor import DriftMonitor
 
 # Import configuration
 import sys
@@ -116,184 +131,369 @@ async def evaluate(
         y_true = np.array(y_true)
         y_proba = np.array(y_proba)
         y_pred = y_proba >= threshold
+
+        actual_fraud_rate = float(y_true.mean())
+        predicted_fraud_rate = float(y_pred.mean())
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel().tolist()
+
         return {
             "count": len(y_true),
+            "actual_fraud_rate": actual_fraud_rate,
+            "predicted_fraud_rate": predicted_fraud_rate,
+            "fraud_rate_gap": abs(actual_fraud_rate - predicted_fraud_rate),
+            "false positive rate": 100 * fp / len(y_true),
+            "false negative rate": 100 * fn / len(y_true),
             "accuracy": accuracy_score(y_true, y_pred),
             "f1": f1_score(y_true, y_pred),
             "precision": precision_score(y_true, y_pred),
             "recall": recall_score(y_true, y_pred),
             "pr_auc": average_precision_score(y_true, y_proba)
-    }
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+@app.get("/evaluate/rolling")
+async def evaluate_rolling(
+    window_size: int = 5000,
+    threshold: float = 0.45,
+    redis_client: Redis = Depends(get_redis_client)
+):
+    """Evaluate model performance of past window_size transactions."""
+    fetch_size = window_size * 3
+    entries = redis_client.xrevrange(RESULT_STREAM, count=fetch_size)
+    
+    if not entries:
+        return {                                                                       
+            "count": 0,                                                                
+            "window_size": window_size,                                                
+            "message": "No transactions in RESULT_STREAM"                              
+      }     
+
+    y_true = []
+    y_proba = []
+
+    try:
+        # iterate through recent transactions, collect labelled  ones
+        for stream_id, data in entries:
+            transaction_id = data.get("transaction_id")
+            if not transaction_id:
+                continue
+
+            # check if transaction's true label is known
+            prediction_key = f"prediction:{transaction_id}"
+            true_label = redis_client.hget(prediction_key, "true_label")
+
+            if not true_label:
+                continue
+
+            fraud_proba = float(data.get("fraud_probability", 0))
+
+            y_true.append(true_label)
+            y_proba.append(fraud_proba)
+
+            if len(y_true) >= window_size:
+                break
+            
+        if len(y_true) == 0:
+            return {                                                                       
+                "count": 0,                                                                
+                "window_size": window_size,                                                
+                "message": "No labeled transactions found in recent data"                              
+        }     
+
+        y_true = np.array(y_true)
+        y_proba = np.array(y_proba)
+        y_pred = y_proba >= threshold
+
+        actual_fraud_rate = float(y_true.mean())
+        predicted_fraud_rate = float(y_pred.mean())
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel().tolist()
+
+        return {
+            "count": len(y_true),
+            "window_size": window_size,
+            "actual_fraud_rate": actual_fraud_rate,
+            "predicted_fraud_rate": predicted_fraud_rate,
+            "fraud_rate_gap": abs(actual_fraud_rate - predicted_fraud_rate),
+            "false positive rate": 100 * fp / len(y_true),
+            "false negative rate": 100 * fn / len(y_true),
+            "accuracy": accuracy_score(y_true, y_pred),
+            "f1": f1_score(y_true, y_pred),
+            "precision": precision_score(y_true, y_pred),
+            "recall": recall_score(y_true, y_pred),
+            "pr_auc": average_precision_score(y_true, y_proba)
+        }
+
+    except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/transactions/analyse")
+async def get_transactions_to_analyse(
+    threshold_seen: float = 0.4,
+    threshold_unseen: float = 0.1,
+    threshold_rules: float = 0.8,
+    limit: int = 1000,
+    redis_client: Redis = Depends(get_redis_client)
+):
+    """Retrieve transactions that require anaysis based on model-specific thresholds."""
+
+    risky_transactions = []
+    seen_count = 0
+    unseen_count = 0
+    rules_count = 0
+
+    try:
+        entries = redis_client.xrevrange(RESULT_STREAM, count=limit * 3)
+
+        if not entries:
+            return {
+                "total_count": 0,
+                "seen_count": 0,
+                "unseen_count": 0,
+                "rules_count": 0,
+                "transactions": [],
+                "message": "No transactions available"
+            }
+
+        else:
+
+            for stream_id, data in entries:
+                fraud_proba = float(data.get("fraud_proba"))
+                model_used = data.get("model_used")
+
+                # Determine if transaction exceeds threshold for its model
+                should_analyze = False
+                if model_used == "seen_devices" and fraud_proba >= threshold_seen:
+                    should_analyze = True
+                    seen_count += 1
+                elif model_used == "unseen_devices" and fraud_proba >= threshold_unseen:
+                    should_analyze = True
+                    unseen_count += 1
+                elif model_used == "rule_based" and fraud_proba >= threshold_rules:
+                    should_analyze = True
+                    rules_count += 1
+                
+                if not should_analyze:
+                    continue
+
+                else:
+                    # can add additional fields next time
+                    risky_transaction = {
+                        "transaction_id": data.get("transaction_id"),
+                        "device_id": data.get("device_id"),
+                        "purchase_time": data.get("purchase_time"),
+                        "risk_score": fraud_proba,
+                        "model_used": model_used,
+                        "purchase_value": data.get("purchase_value"),
+                        "device_txn_idx": data.get("device_txn_idx"),
+                        "source": data.get("source"),
+                        "browser": data.get("browser")
+                    }
+                    risky_transactions.append(risky_transaction)
+
+        return {
+            "total_count": len(risky_transactions),
+            "seen_count": seen_count,
+            "unseen_count": unseen_count,
+            "rules_count": rules_count,
+            "transactions": risky_transactions,
+            "thresholds": {
+                "seen_devices": threshold_seen,
+                "unseen_devices": threshold_unseen,
+                "rule_based": threshold_rules
+            }
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/stats/summary")
-def get_summary_stats(
-    threshold: float = 0.45,
-    high_risk_threshold: float = 0.8,
+
+@app.get("/evaluate/business")
+def evaluate_business_value(
+    window_size: int = 5000,
+    threshold_seen: float = 0.4,
+    threshold_unseen: float = 0.1,
+    threshold_rules: float = 0.8,
     redis_client: Redis = Depends(get_redis_client)
 ):
+    """Evaluate system performance based on purchase_value of transactions, assuming that all transactions raised for review are eventually correctly classified."""
+    
+    total_transaction_value = 0
+    fraud_caught_value = 0
+    missed_fraud_value = 0
+    genuine_value = 0
+
     try:
-        entries = redis_client.xrevrange(RESULT_STREAM)
-        if not entries:
-            return {                                                                                 
-                 "total_transactions": 0,                                                             
-                 "fraud_count": 0,                                                                    
-                 "fraud_percentage": 0.0,                                                             
-                 "avg_fraud_probability": 0.0,                                                        
-                 "high_risk_count": 0,                                                                
-                 "legitimate_count": 0                                                                
-            } 
+        entries = redis_client.xrevrange(RESULT_STREAM, count=window_size) 
         
-        total = len(entries)
-        fraud_count = 0
-        high_risk_count = 0
-        fraud_prob_sum = 0.0
+        if not entries:
+            pass
+
+        else:
+            for stream_id, data in entries:
+                transaction_id = data.get("transaction_id")
+                purchase_value = float(data.get("purchase_value"))
+                fraud_proba = float(data.get("fraud_proba"))
+                model_used = data.get("model_used")
+
+                prediction_key = f"prediction:{transaction_id}"
+                true_label = int(redis_client.hget(prediction_key, "true_label"))
+
+                if true_label == -1: # label has not arrived
+                    continue
+
+                # Determine if transaction exceeds threshold for its model
+                should_analyze = False
+                if model_used == "seen_devices" and fraud_proba >= threshold_seen:
+                    should_analyze = True
+                elif model_used == "unseen_devices" and fraud_proba >= threshold_unseen:
+                    should_analyze = True
+                elif model_used == "rule_based" and fraud_proba >= threshold_rules:
+                    should_analyze = True
+
+                if should_analyze: # assume all analysed transactions are correctly classified
+                    if true_label == 1:
+                        fraud_caught_value += purchase_value
+                    else:
+                        genuine_value += purchase_value
+                else:
+                    if true_label == 1:
+                        missed_fraud_value += purchase_value
+                    else:
+                        genuine_value += purchase_value
+
+                total_transaction_value += purchase_value
+
+            return {
+                "total_transaction_value": total_transaction_value,
+                "fraud_caught_value": fraud_caught_value,
+                "genuine_value": genuine_value,
+                "missed_fraud_value": missed_fraud_value
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))   
+        
+
+@app.get("/drift/check")
+def check_drift(
+    window_size: int = 5000,
+    drift_threshold: float = 0.2,
+    redis_client: Redis = Depends(get_redis_client)
+):
+    """Compare distribution of last window_size transactions with transactions used in training."""
+    
+    try:
+        entries = redis_client.xrevrange(RESULT_STREAM, count=window_size)
+        if not entries:
+            return {                                                                       
+                "message": "No transactions available",                                    
+                "drift_results": {},                                                       
+                "num_features_drifted": 0,                                                 
+                "should_retrain": False                                                    
+            }  
+        
+        transactions = []
 
         for stream_id, data in entries:
-            fraud_prob = float(data.get("fraud_probability", 0))
-            pred_class = fraud_prob >= threshold
+            transaction = {}
 
-            fraud_prob_sum += fraud_prob
+            for feature in categorical_features + boolean_features + ["rule_label"]:
+                transaction[feature] = data.get(feature)
+                transactions.append(transaction)
 
-            if pred_class == 1:
-                fraud_count += 1
+        current_df = pd.DataFrame(transactions)
+
+        drift_monitor = DriftMonitor()
+
+        # Get production model's run_id to retrieve stored data references
+        client = MlflowClient()
+        try:
+            model_version = client.get_model_version_by_alias("fraud_detection_seen_devices", "Production")
+            run_id = model_version.run_id 
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Production model not found. Error: {e}"
+            )
+        
+        drift_results = {}
+        for feature in categorical_features:
+            if feature not in current_df.columns:
+                continue
+
+            try:
+                baseline_dict = mlflow.artifacts.load_dict(
+                    f"runs:/{run_id}/drift_reference/{feature}.json"
+                )
+                current_dict = drift_monitor.build_categorical_feature_reference(
+                    current_df, feature, logging=False
+                )
+                drift_score = drift_monitor.monitor_drift(baseline_dict, current_dict)
+                drift_results[feature] = {
+                    "drift_score": float(drift_score),
+                    "drifted": drift_score >= drift_threshold,
+                    "type": "categorical"
+                }
             
-            if fraud_prob >= high_risk_threshold:
-                high_risk_count += 1
-        
-        legitimate_count = total - fraud_count
-        fraud_percentage = (fraud_count / total) * 100 if total > 0 else 0
-        avg_fraud_prob = fraud_prob_sum / total if total > 0 else 0
+            except Exception as e:
+                print(f"Error checking drift for {feature}: {e}")                          
+                continue
 
-        return {                                                                                     
-             "total_transactions": total,                                                             
-             "fraud_count": fraud_count,                                                              
-             "fraud_percentage": fraud_percentage,                                                    
-             "avg_fraud_probability": avg_fraud_prob,                                                 
-             "high_risk_count": high_risk_count,                                                      
-             "legitimate_count": legitimate_count                                                     
-         }                                                                                            
-                                                                                                      
-    except Exception as e:                                                                           
-        raise HTTPException(status_code=500, detail=str(e))       
+        for feature in boolean_features + ["rule_label"]:
+            if feature not in current_df.columns:
+                continue
 
+            try:
+                baseline_dict = mlflow.artifacts.load_dict(
+                    f"runs:/{run_id}/drift_reference/{feature}.json"
+                )
+                current_dict = drift_monitor.build_categorical_feature_reference(
+                    current_df, feature, logging=False
+                )
+                drift_score = drift_monitor.monitor_drift(baseline_dict, current_dict)
+                drift_results[feature] = {
+                    "drift_score": float(drift_score),
+                    "drifted": drift_score >= drift_threshold,
+                    "type": "boolean"
+                }
+            
+            except Exception as e:
+                print(f"Error checking drift for {feature}: {e}")                          
+                continue
 
-@app.get("/stats/hourly")
-def get_hourly_stats(
-    threshold: float = 0.45,
-    hours: int = 24,
-    redis_client: Redis = Depends(get_redis_client)
-):
-    """Return hourly aggregated statistics."""
-    hourly_stats = []
+        for feature in numerical_features:
+            if feature not in current_df.columns:
+                continue
 
-    try:
-        entries = redis_client.xrevrange(RESULT_STREAM)
+            try:
+                baseline_dict = mlflow.artifacts.load_dict(
+                    f"runs:/{run_id}/drift_reference/{feature}.json"
+                )
+                current_dict = drift_monitor.build_categorical_feature_reference(
+                    current_df, feature, logging=False
+                )
+                drift_score = drift_monitor.monitor_drift(baseline_dict, current_dict)
+                drift_results[feature] = {
+                    "drift_score": float(drift_score),
+                    "drifted": drift_score >= drift_threshold,
+                    "type": "numerical"
+                }
+            
+            except Exception as e:
+                print(f"Error checking drift for {feature}: {e}")                          
+                continue
 
-        if not entries:
-            return {"hourly_stats": []}
-        
-        latest_timestamp = datetime.fromisoformat(entries[0][1].get("purchase_time"))
-        latest_hour_str =  latest_timestamp.strftime('%Y-%m-%d %H:00:00')
-        latest_hour_key = datetime.strptime(latest_hour_str, '%Y-%m-%d %H:00:00')
-        earliest_hour_key = latest_hour_key - timedelta(hours=hours)
-
-        hourly_data = defaultdict(lambda: {'total': 0, 'fraud': 0, 'prob_sum': 0.0})
-
-        for stream_id, data in entries:
-            hour_str = datetime.fromisoformat(data.get("purchase_time")).strftime('%Y-%m-%d %H:00:00') 
-            hour_key = datetime.strptime(hour_str, '%Y-%m-%d %H:00:00')
-
-            if hour_key >= earliest_hour_key:
-                fraud_prob = float(data.get("fraud_probability", 0))
-                pred_class = fraud_prob >= threshold
-
-                hourly_data[hour_key]["total"] += 1
-                hourly_data[hour_key]["fraud"] += 1 if pred_class else 0
-                hourly_data[hour_key]["prob_sum"] += fraud_prob
-
-            else:
-                break   
-                
-        for hour, stats in sorted(hourly_data.items()):
-            total = stats['total']
-            fraud = stats['fraud']
-            hourly_stats.append({
-                'hour': hour,
-                'total_count': total,
-                'fraud_count': fraud,
-                'fraud_rate': fraud/total if total > 0 else 0,
-                'average_fraud_probability': stats['prob_sum'] / total if total > 0 else 0.0
-            })
-        
-        return {"hourly_stats": hourly_stats}
-                                                                                                
-    except Exception as e:                                                                           
-        raise HTTPException(status_code=500, detail=str(e))
-    
-
-@app.get("/results/high-risk")
-def get_high_risk_transactions(
-    high_risk_threshold: float = 0.8,
-    redis_client: Redis = Depends(get_redis_client)
-):
-    """Returns transactions with fraud probability above a threshold."""
-    entries = redis_client.xrevrange(RESULT_STREAM)
-    if not entries:
-        return {"results": []}
-
-    high_risk_transactions = []
-    for _, data in entries:
-        fraud_prob = float(data.get("fraud_probability", 0))
-        if fraud_prob >= high_risk_threshold:
-            high_risk_transactions.append(data)
-    
-    return {
-        "count": len(high_risk_transactions),
-        "results": high_risk_transactions
-    }
-
-                                                                                                    
-@app.get("/stats/features")
-def get_feature_stats(
-    redis_client: Redis = Depends(get_redis_client)
-):
-    """Returns aggregated feature statistics for fraud vs non-fraud."""
-    entries = redis_client.xrevrange(RESULT_STREAM)
-    feature_stats = {
-            "fraud_features": {},
-            "legitimate_features": {},
+        return {
+            "window_size": len(current_df),
+            "threshold": drift_threshold,
+            "run_id": run_id,
+            "drift_results": drift_results,
+            "num_features_drifted": sum(1 for r in drift_results.values() if r["drifted"]),
+            "total_features_monitored": len(drift_results)
         }
-    
-    try:
-        if not entries:
-            return feature_stats
-
-        # boolean features used by the model, analyse how the model uses boolean features to classify transactions
-        transactions = 0
         
-        for _, data in entries:
-            pred_class = int(data.get("predicted_class"))
-            transactions += 1
-
-            key = "fraud_features" if pred_class else "legitimate_features"
-
-            for feature in ['ip_switched', 'sex_changed', 'identity_changed', 'fast_purchase', 'device_txn_velocity_1h', 'device_txn_velocity_24h']:
-                # quickfix: works for binary addiition
-                value = float(data.get(feature)) 
-                feature_stats[key][feature] = feature_stats[key].get(feature, 0.0) + value
-
-        print(f"feature_stats: {feature_stats}")
-
-        # change from sum to mean
-        for key in ["fraud_features", "legitimate_features"]:
-            for feature in ['ip_switched', 'sex_changed', 'identity_changed', 'fast_purchase', 'device_txn_velocity_1h', 'device_txn_velocity_24h']:
-                feature_stats[key][feature] = round(feature_stats[key][feature] / transactions, 2)
-        
-        return feature_stats
-            
-    except Exception as e:                                                                           
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    

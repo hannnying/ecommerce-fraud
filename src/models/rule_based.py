@@ -54,7 +54,7 @@ class RuleBasedModel:
               - Cannot determine with high confidence from rules alone          
               - Transaction should be sent to ML model for prediction               
     """
-        if transaction["fast_purchase"]:
+        if transaction["time_setup_to_txn_seconds"] <= 60:
             return 1
         
         if mode == 1:
