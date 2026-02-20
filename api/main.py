@@ -183,7 +183,7 @@ async def evaluate_rolling(
 
             # check if transaction's true label is known
             prediction_key = f"prediction:{transaction_id}"
-            true_label = redis_client.get(prediction_key, "true_label")
+            true_label = redis_client.hget(prediction_key, "true_label")
 
             if not true_label:
                 continue
@@ -334,12 +334,12 @@ def evaluate_business_value(
         else:
             for stream_id, data in entries:
                 transaction_id = data.get("transaction_id")
-                purchase_value = int(data.get("purchase_value"))
+                purchase_value = float(data.get("purchase_value"))
                 fraud_proba = float(data.get("fraud_proba"))
                 model_used = data.get("model_used")
 
-                prediction_key = f"predictions:{transaction_id}"
-                true_label = int(redis_client.get(prediction_key, "true_label"))
+                prediction_key = f"prediction:{transaction_id}"
+                true_label = int(redis_client.hget(prediction_key, "true_label"))
 
                 if true_label == -1: # label has not arrived
                     continue
@@ -411,7 +411,7 @@ def check_drift(
         # Get production model's run_id to retrieve stored data references
         client = MlflowClient()
         try:
-            model_version = client.get_model_version_by_alias("fraud_detection_model", "Production")
+            model_version = client.get_model_version_by_alias("fraud_detection_seen_devices", "Production")
             run_id = model_version.run_id 
         except Exception as e:
             raise HTTPException(

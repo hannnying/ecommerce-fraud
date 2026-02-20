@@ -65,7 +65,7 @@ DEVICE_STATE_SCHEMA = {
 PREDICTION_STORE_SCHEMA = {
     "transaction_id": FIELD_TYPES["str"],
     "device_id": FIELD_TYPES["str"],
-    "purchase_value": FIELD_TYPES["int"],
+    "purchase_value": FIELD_TYPES["float"],
     "purchase_time": FIELD_TYPES["datetime"],
     "device_txn_idx": FIELD_TYPES["int"],
     "device_time_since_last_s": FIELD_TYPES["float"],
