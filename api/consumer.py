@@ -25,7 +25,8 @@ from src.models.rule_based import RuleBasedModel
 from src.state.device_state_flexible import DeviceState
 from src.state.global_bucket import GlobalVelocity
 from src.state.ip_state import IPState
-from src.state.prediction_store import PredictionStore
+# from src.state.prediction_store import PredictionStore
+from src.state.prediction_store_sql import PredictionRepository
 
 
 class InferenceConsumer:
@@ -35,7 +36,8 @@ class InferenceConsumer:
         self.feature_engineer = TransactionFeatureEngineer()
         self.global_velocity = None
         self.ip_state = None
-        self.prediction_store = PredictionStore()
+        # self.prediction_store = PredictionStore()
+        self.prediction_store = PredictionRepository()
         self.rule_based_model = RuleBasedModel()
 
         # Two models: one for seen devices, one for unseen

@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 from typing import Any, Callable
 
+from sqlalchemy import Column, String, Float, Integer, DateTime
 
 class FieldType:
     """Defines how a field is serialized and deserialized."""
@@ -60,7 +61,7 @@ DEVICE_STATE_SCHEMA = {
     "prev_is_fraud": FIELD_TYPES["int"]
 }
 
-# PREDICTION STORE SCHEMA
+# PREDICTION STORE SCHEMA (Redis hash storage)
 # Stores values before scaling and encoding
 PREDICTION_STORE_SCHEMA = {
     "transaction_id": FIELD_TYPES["str"],
@@ -97,7 +98,54 @@ PREDICTION_STORE_SCHEMA = {
     "true_label": FIELD_TYPES["int"]
 }
 
+# PREDICTION STORE SCHEMA (SQLAlchemy)
+PREDICTION_ATTR_DICT = {
+    "__tablename__": "predictions",
 
+    "transaction_id": Column(String, primary_key=True),
+
+    "device_id": Column(String),
+    "purchase_value": Column(Float),
+    "purchase_time": Column(DateTime),
+
+    "device_txn_idx": Column(Integer),
+    "device_time_since_last_s": Column(Float),
+    "device_age_hours": Column(Float),
+
+    "signup_before_first_device_txn": Column(Integer),
+    "repeated_device_purchase": Column(Integer),
+    "purchase_spike": Column(Integer),
+    "identity_changed": Column(Integer),
+
+    "device_txn_velocity_24h": Column(Integer),
+    "prev_is_fraud": Column(Integer),
+    "global_txn_velocity_24h": Column(Integer),
+    "country_txn_velocity_24h": Column(Integer),
+
+    "time_setup_to_txn_seconds": Column(Float),
+    "purchase_hour": Column(Integer),
+    "is_late_night": Column(Integer),
+
+    "under_18": Column(Integer),
+
+    # Columns starting with numbers need safe Python attribute names
+    "age_18_25": Column("18_25", Integer),
+    "age_26_35": Column("26_35", Integer),
+    "age_36_50": Column("36_50", Integer),
+
+    "over_50": Column(Integer),
+
+    "amount_per_age": Column(Float),
+
+    "unknown_country": Column(Integer),
+    "source": Column(String),
+    "browser": Column(String),
+
+    "fraud_proba": Column(Float),
+    "model_used": Column(String),
+
+    "true_label": Column(Integer),
+}
 def get_field_names(schema):
     """Get ordered list of field names from schema."""
     return list(schema.keys())
