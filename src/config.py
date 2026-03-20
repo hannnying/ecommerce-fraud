@@ -71,9 +71,9 @@ boolean_features = [
     'prev_is_fraud',
     'is_late_night',
     'under_18',
-    '18_25',
-    '26_35',
-    '36_50',
+    'age_18_25',
+    'age_26_35',
+    'age_36_50',
     '50_above',
     'unknown_country'
 ]
@@ -123,9 +123,9 @@ unseen_device_numerical_features = [
 unseen_device_boolean_features = [
     'is_late_night',
     'under_18',
-    '18_25',
-    '26_35',
-    '36_50',
+    'age_18_25',
+    'age_26_35',
+    'age_36_50',
     '50_above',
     'unknown_country'
 ]
@@ -242,6 +242,10 @@ PARAM_GRIDS = {
         'n_jobs': [-1]
     }
 }
+
+# DB URL
+test_db_url = "postgresql://postgres@localhost:5432/fraud_db_test"
+db_url = "postgresql://postgres@localhost:5432/fraud_db"
 
 # Evaluation metrics
 METRICS = ['accuracy', 'precision', 'recall', 'f1', 'roc_auc', 'pr_auc']

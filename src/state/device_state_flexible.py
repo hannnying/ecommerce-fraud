@@ -10,7 +10,6 @@ from redis import Redis
 from src.config import REDIS_DB, REDIS_HOST, REDIS_PORT
 from src.state.device_schema import DEVICE_STATE_SCHEMA, get_field_names, get_default_state
 
-
 class DeviceState:
 
     def __init__(self):
@@ -131,6 +130,38 @@ class DeviceState:
             if ":txn_timestamp" not in key:
                 count += 1
         return count
+    
+    def build_state_from_df(self, df: pd.DataFrame) -> None:
+        """Construct device state and device timestamps from dataframe."""
+
+        device_ids = df["device_id"].unique()
+
+        for id in device_ids:
+            key = f"device_id:{id}"
+            device_txn = df[df["device_id"] == id]
+            first = device_txn.iloc[0]
+            last = device_txn.iloc[-1]
+            
+            # hardcoded
+            state = {
+                "txn_count": last.loc["device_txn_idx"],
+                "first_seen_signup": first.loc["signup_time"],
+                "first_seen": first.loc["purchase_time"],
+                "last_seen": last.loc["purchase_time"],
+                "prev_identity": last.loc["identity"],
+                "prev_purchase": last.loc["purchase_value"],
+                "prev_is_fraud": last.loc["is_fraud"]
+            }
+
+            self.client.hset(key, mapping=self._serialize_state(state))
+
+        last_txn = df.iloc[-1]
+        timestamp_threshold = (last_txn["purchase_time"] - pd.Timedelta(days=1)).timestamp()
+        
+        for idx, row in df[df["purchase_time"] >= timestamp_threshold]:
+            key = f"device:{id}:txn_timestamp"
+            self.client.zadd(key, mapping={row["transaction_id"]: row["purchase_time"].timestamp()})
+
 
     def export_to_file(self, filepath: str, export_timestamps: bool = True) -> None:
         """

@@ -59,14 +59,17 @@ class TransactionFeatureEngineer:
         prev_purchase = device_state.get("prev_purchase")
         prev_is_fraud = device_state.get("prev_is_fraud")
 
+        identity = sex + str(age)
+        device_features["identity"] = identity
+
         # Compute features
         device_features["device_txn_idx"] = txn_count + 1 if txn_count else 1
         device_features["device_time_since_last_s"] = -1 if not last_seen else (purchase_time - last_seen).total_seconds()
         device_features["device_age_hours"] = -1 if not first_seen else (purchase_time - first_seen).total_seconds() / 3600
         device_features["signup_before_first_device_txn"] = False if not first_seen_signup else signup_time < first_seen_signup
         device_features["repeated_device_purchase"] = (prev_purchase != None) & (prev_purchase == purchase_value)
-        device_features["purchase_spike"] = (prev_purchase != None) & (prev_purchase < purchase_value)
-        device_features["identity_changed"] = (prev_identity != None) & (prev_identity == sex+str(age))
+        device_features["purchase_spike"] = (prev_purchase != 0) & (prev_purchase < purchase_value)
+        device_features["identity_changed"] = (prev_identity != None) & (prev_identity != identity)
         device_features["device_txn_velocity_24h"] = self.device_state.get_device_txn_velocity(device_id, purchase_time, "24h") + 1
         device_features["prev_is_fraud"] = prev_is_fraud == 1
 
@@ -122,10 +125,10 @@ class TransactionFeatureEngineer:
 
         # age
         processed_transaction["under_18"] = age < 18
-        processed_transaction["18_25"] = (age >= 18) & (age < 25)
-        processed_transaction["26_35"] = (age >= 25) & (age < 36)
-        processed_transaction["36_50"] = (age >= 36) & (age < 50)
-        processed_transaction["50_above"] = age >= 50
+        processed_transaction["age_18_25"] = (age >= 18) & (age < 25)
+        processed_transaction["age_26_35"] = (age >= 25) & (age < 36)
+        processed_transaction["age_36_50"] = (age >= 36) & (age < 50)
+        processed_transaction["age_50_above"] = age >= 50
         processed_transaction["amount_per_age"] = purchase_value / age
 
         # country
