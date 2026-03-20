@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+import pandas as pd
 import pickle
 from redis import Redis
 from src.config import(
@@ -15,52 +16,60 @@ class GlobalVelocity:
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
         self.bucket_size_seconds = BUCKET_SIZE_SECONDS
 
-    def update_bucket(self, purchase_time: datetime, country: str) -> None:
-        current_bucket = int(purchase_time.timestamp() // self.bucket_size_seconds)
-
-        self.update_country_bucket(country, current_bucket)
-        self.update_global_bucket(current_bucket)
-
-    def update_country_bucket(self, country: str, current_bucket: int) -> None:
-        country_bucket_key = f"{country}:txn_count:bucket:{current_bucket}"
-        self.client.incr(country_bucket_key)
-        self.client.expire(country_bucket_key, 25 * 3600)
-
-    def update_global_bucket(self, current_bucket: int) -> None:
-        bucket_key = f"global:txn_count:bucket:{current_bucket}"
-        self.client.incr(bucket_key)
-        self.client.expire(bucket_key, 25 * 3600)
-
-    def get_txn_velocity(self, purchase_time: datetime, time_window: str, country: str = None):
-        if time_window == "1h":
-            num_buckets = 3600 // self.bucket_size_seconds
-
-        elif time_window == "24h":
-            num_buckets = 86400 // self.bucket_size_seconds
-
+    def update_bucket(self, transaction_id: str, purchase_time: datetime, country: str = None) -> None:
+        if country:
+            key = f"country:{country}:txn_timestamp"
         else:
-            raise ValueError(f"{time_window} not supported")
+            key = f"global:txn_timestamp"
+
+        self.client.zadd(key, mapping={transaction_id: purchase_time.timestamp()})
+
+        # Remove timestamps > 24 hours
+        timestamp_threshold = (purchase_time - pd.Timedelta(days=1)).timestamp()
+        self.client.zremrangebyscore(key, float("-inf"), timestamp_threshold)
+
+    def get_txn_velocity(self, purchase_time: datetime, time_window: str, country: str = None) -> int:
+        if country:
+            key = f"country:{country}:txn_timestamp"
+        else:
+            key = f"global:txn_timestamp"
+
+        if time_window == "1h":
+            timestamp_threshold = purchase_time - pd.Timedelta(1, "h")
+        elif time_window == "24h":
+            timestamp_threshold = purchase_time - pd.Timedelta(1, "d")
+        else:
+            raise ValueError(f"Invalid time_window: {time_window}")
+
+        min_score = timestamp_threshold.timestamp()
+        max_score = purchase_time.timestamp()
+
+        return self.client.zcount(key, min_score, max_score)
+
         
-        current_bucket = int(purchase_time.timestamp() // self.bucket_size_seconds)
-        total = 0
-
-        for i in range(num_buckets):
-            bucket_id = current_bucket - i
-            if country:
-                bucket_key = f"{country}:txn_count:bucket:{bucket_id}"
-            else:
-                bucket_key = f"global:txn_count:bucket:{bucket_id}"
-            count = self.client.get(bucket_key)
-            total += int(count) if count else 0 
-
-        return total
-
     def count_buckets(self) -> int:
         """Count total number of buckets (global and country-specific) stored in Redis."""
         count = 0
         for _ in self.client.scan_iter("*:txn_count:bucket:*", count=1000):
             count += 1
         return count
+    
+    def build_bucket_from_df(self, df: pd.DataFrame) -> None:
+        """Construct velocity buckets from pandas dataframe."""
+
+        last_txn = df.iloc[-1]
+        timestamp_threshold = (last_txn["purchase_time"] - pd.Timedelta(days=1)).timestamp()
+
+        for idx, row in df[df["purchase_time"] >= timestamp_threshold]:
+            current_bucket = int(row["purchase_time"].timestamp() // self.bucket_size_seconds)
+            country_bucket_key = f"{row["country"]}:txn_count:bucket:{current_bucket}"
+            global_bucket_key = f"global:txn_count:bucket:{current_bucket}"
+            
+            self.client.incr(global_bucket_key)
+            self.client.expire(global_bucket_key, 25 * 3600)
+
+            self.client.incr(country_bucket_key)
+            self.client.expire(country_bucket_key, 25 * 3600)
 
     def export_to_file(self, filepath: str) -> None:
         """
