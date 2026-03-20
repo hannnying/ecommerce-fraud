@@ -17,6 +17,7 @@ from src.config import (
     REDIS_PORT,
     RESULT_STREAM,
     TRANSACTION_STREAM,
+    db_url,
     seen_device_features,
     unseen_device_features
 )
@@ -28,16 +29,21 @@ from src.state.ip_state import IPState
 # from src.state.prediction_store import PredictionStore
 from src.state.prediction_store_sql import PredictionRepository
 
+# A/B testing: compare current model with latest retrained model
+#   - transactions have to be processed by both models
+#   - log both versions to prediction_store_sql, add version to prediction row to track which model was used 
+#   - model selection can be imeplemented later 
+
 
 class InferenceConsumer:
-    def __init__(self, seen_model_uri=None, unseen_model_uri=None):
+    def __init__(self, db_url: str, seen_model_uri=None, unseen_model_uri=None):
         self.client = Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
         self.device_state = None
         self.feature_engineer = TransactionFeatureEngineer()
         self.global_velocity = None
         self.ip_state = None
         # self.prediction_store = PredictionStore()
-        self.prediction_store = PredictionRepository()
+        self.prediction_store = PredictionRepository(db_url=db_url)
         self.rule_based_model = RuleBasedModel()
 
         # Two models: one for seen devices, one for unseen
@@ -319,6 +325,7 @@ if __name__=="__main__":
     unseen_model_uri = "models:/fraud_detection_unseen_devices@Production"
 
     inference_consumer = InferenceConsumer(
+        db_url=db_url,
         seen_model_uri=seen_model_uri,
         unseen_model_uri=unseen_model_uri
     )

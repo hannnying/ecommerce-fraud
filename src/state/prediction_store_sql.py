@@ -1,7 +1,8 @@
 # Initially, predictions were stored in a Redis hash, now stroed in postgres
-
+# prereq: create db
+import pandas as pd
 from src.state.device_schema import PREDICTION_ATTR_DICT
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -39,3 +40,19 @@ class PredictionRepository:
                 processed_transaction_instance.label = is_fraud
             else:
                 raise ValueError(f"Transaction with id: {transaction_id} has not been processed.")
+
+    def get_new_labeled_count(self):
+        with self.Session() as session:
+            count = session.query(func.count(PredictionModel.transaction_id)).scalar()
+            return count
+        
+
+    def fetch_training_dataset(self):
+        """Return all labelled transactions for retraining."""
+
+        with self.Session() as session:
+            transactions = session.query(PredictionModel).all()
+        
+        # this returns a Query object
+        return pd.DataFrame(transactions)
+

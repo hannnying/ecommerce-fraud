@@ -37,14 +37,18 @@ class Train:
     def __init__(self, processed_transaction_path=None):
         self.device_state = DeviceState()
         self.global_velocity = GlobalVelocity()
-        self.ip_state = IPState()
+        # self.ip_state = IPState()
         self.feature_engineer = TransactionFeatureEngineer()
         self.model = FraudDetectionModel(
             resampling_type="smote",
             model_type="logistic_regression",
             custom_params={"penalty": "l2", "C": 2}
         )
-        self.processed_transaction_path = Path(processed_transaction_path)
+        if processed_transaction_path:
+            self.processed_transaction_path = Path(processed_transaction_path)
+        else:
+            self.processed_transaction_path = None
+        
 
     def train_unknown_devices_model_pipeline(self, unknown_devices_df):
         """
@@ -91,7 +95,7 @@ class Train:
         print(f"Date range: {df['purchase_time'].min()} to {df['purchase_time'].max()}")
         print(f"{'='*70}\n")
 
-        if self.processed_transaction_path.exists() and self.processed_transaction_path.is_file():
+        if self.processed_transaction_path and self.processed_transaction_path.exists() and self.processed_transaction_path.is_file():
                 processed_train = pd.read_csv(self.processed_transaction_path)
                 processed_train["purchase_time"] = pd.to_datetime(processed_train["purchase_time"])
                 print(f"Read full processed data from: {self.processed_transaction_path}...")
@@ -104,6 +108,13 @@ class Train:
                 transaction_id = str(uuid4())  # ✅ Fixed: Added parentheses
                 purchase_time = row["purchase_time"]
                 processed_transaction, transaction_id, (device_id, state_to_update) = self.feature_engineer.compute_features(row, training=True, transaction_id=transaction_id)
+
+                # store raw values for reconstruction of redis states from dataframe
+                processed_transaction["transaction_id"] = transaction_id
+                processed_transaction["device_id"] = row["device_id"]
+                processed_transaction["country"] = row["country"]
+                processed_transaction["signup_time"] = row["signup_time"]
+                processed_transaction["purchase_value"] = row["purchase_value"]
 
                 # assess transaction risk using rules
                 processed_transaction["rule_label"] = RuleBasedModel().predict(processed_transaction)
@@ -123,9 +134,9 @@ class Train:
                 )
 
                 self.device_state.update_device_timestamp(device_id, transaction_id, purchase_time)
+                self.global_velocity.update_bucket(transaction_id, purchase_time)
+                self.global_velocity.update_bucket(transaction_id, purchase_time, row["country"])
 
-                # ✅ Fixed: Added country parameter
-                self.global_velocity.update_bucket(purchase_time, row["country"])
 
             processed_train = pd.DataFrame(processed_train)
 
@@ -192,11 +203,13 @@ class Train:
             print(f"{'='*60}\n")
 
         # save states
+        if self.processed_transaction_path:
+            self.device_state.build_state_from_df(processed_train)
+            self.global_velocity.build_bucket_from_df(processed_train)
+
         self.device_state.export_to_file(DEVICE_STATE_PATH)
         self.global_velocity.export_to_file(GLOBAL_BUCKETS_PATH)
-        self.ip_state.export_to_file(IP_STATE_PATH)
-
-
+        
 if __name__=="__main__":
     parser = argparse.ArgumentParser(description="Script to train models on Jan-Jun transactions")
     parser.add_argument("--processed_train_path", help="Load processed transactions") # 'data/processed/processed_train.csv'
