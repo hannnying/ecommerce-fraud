@@ -48,35 +48,28 @@ class Train:
             self.processed_transaction_path = Path(processed_transaction_path)
         else:
             self.processed_transaction_path = None
-        
 
-    def train_unknown_devices_model_pipeline(self, unknown_devices_df):
+    def train_model(self, model_name: str, df: pd.DataFrame):
         """
-        Resample, scale and encode transactions by unknown devices.
-        Train and save model.
+        
         """
-        unknown_devices_model = FraudDetectionModel(
+        if model_name not in ["unseen_devices", "seen_devices"]:
+            raise ValueError(f"model_name must be either unseen_devices or seen_devices")
+        
+        model = FraudDetectionModel(
             resampling_type="smote",
             model_type="logistic_regression",
             custom_params={"penalty": "l2", "random_state": 42},
-            model_name="unseen_devices"
+            model_name=model_name
         )
-        X, y = unknown_devices_df[unseen_device_features], unknown_devices_df[TARGET_COL]
-        unknown_devices_model.fit(X, y)
 
+        if model_name == "unseen_devices":
+            X = df[unseen_device_features]
+        else:
+            X = df[seen_device_features]
 
-    def train_seen_devices_model_pipeline(self, seen_devices_df):
-        """
-        Scale and encode transactions by seen devices.
-        Train and save model.
-        """
-        seen_devices_model = FraudDetectionModel(
-            model_type="logistic_regression",
-            custom_params={"penalty": "l2", "random_state": 42},
-            model_name="seen_devices"
-        )
-        X, y = seen_devices_df[seen_device_features], seen_devices_df[TARGET_COL]
-        seen_devices_model.fit(X, y)
+        y = df[TARGET_COL]
+        model.fit(X, y)
 
 
     def train_pipeline(self):
@@ -95,10 +88,12 @@ class Train:
         print(f"Date range: {df['purchase_time'].min()} to {df['purchase_time'].max()}")
         print(f"{'='*70}\n")
 
+        counter = 0
+
         if self.processed_transaction_path and self.processed_transaction_path.exists() and self.processed_transaction_path.is_file():
-                processed_train = pd.read_csv(self.processed_transaction_path)
-                processed_train["purchase_time"] = pd.to_datetime(processed_train["purchase_time"])
-                print(f"Read full processed data from: {self.processed_transaction_path}...")
+            processed_train = pd.read_csv(self.processed_transaction_path)
+            processed_train["purchase_time"] = pd.to_datetime(processed_train["purchase_time"])
+            print(f"Read full processed data from: {self.processed_transaction_path}...")
 
         else:
             print(f"File not found at {self.processed_transaction_path}, processing transactions from {FRAUD_WITH_COUNTRY_PATH}")
@@ -124,10 +119,6 @@ class Train:
 
                 state_to_update["prev_is_fraud"] = row["is_fraud"]
 
-                if idx % 1000 == 0:
-                    print(f"Processed {idx}: {processed_transaction}...")
-                    print("\n")
-
                 self.device_state.update_device_state(
                     device_id=device_id,
                     state_updates=state_to_update
@@ -136,6 +127,15 @@ class Train:
                 self.device_state.update_device_timestamp(device_id, transaction_id, purchase_time)
                 self.global_velocity.update_bucket(transaction_id, purchase_time)
                 self.global_velocity.update_bucket(transaction_id, purchase_time, row["country"])
+
+                counter += 1
+
+                if not counter % 1000:
+                    print(f"processed {counter} transactions: {processed_transaction}")
+                    print("\n")
+
+                if counter == 30000:
+                    break
 
 
             processed_train = pd.DataFrame(processed_train)
@@ -182,8 +182,8 @@ class Train:
             print(f"Started MLflow run: {run_id}")
             print(f"{'='*60}\n")
 
-            self.train_seen_devices_model_pipeline(seen_devices_df)
-            self.train_unknown_devices_model_pipeline(unknown_devices_df)
+            self.train_model(model_name="seen_devices", df=seen_devices_df)
+            self.train_model(model_name="unseen_devices", df=unknown_devices_df)
 
             # Build and log drift references (logs to current run)
             print("Building and logging drift reference distributions...")

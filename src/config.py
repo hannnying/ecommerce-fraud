@@ -74,7 +74,7 @@ boolean_features = [
     'age_18_25',
     'age_26_35',
     'age_36_50',
-    '50_above',
+    'age_50_above',
     'unknown_country'
 ]
 
@@ -126,7 +126,7 @@ unseen_device_boolean_features = [
     'age_18_25',
     'age_26_35',
     'age_36_50',
-    '50_above',
+    'age_50_above',
     'unknown_country'
 ]
 

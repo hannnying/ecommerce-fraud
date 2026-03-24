@@ -53,7 +53,7 @@ class InferenceConsumer:
         self.unseen_preprocessor = None
 
         self._initialize_redis()
-        self._initialize_models(seen_model_uri, unseen_model_uri)
+        self._initialize_models()
 
     def _initialize_redis(self):
         print(f"Loading device state, global buckets and ip state")
@@ -63,114 +63,42 @@ class InferenceConsumer:
         self.ip_state = IPState.load_from_file(IP_STATE_PATH)
 
 
-    def _initialize_models(self, seen_model_uri=None, unseen_model_uri=None):
+    def _initialize_models(self):
         """
         Load both models (seen and unseen devices) from MLflow or local files.
-
-        Args:
-            seen_model_uri: MLflow URI for seen devices model (e.g., "models:/fraud_detection_seen_devices@Production")
-            unseen_model_uri: MLflow URI for unseen devices model (e.g., "models:/fraud_detection_unseen_devices@Production")
         """
         print("Loading fraud detection models...")
 
-        # Load SEEN DEVICES model
-        self._load_model_pair(
-            model_name="seen_devices",
-            model_uri=seen_model_uri or "models:/fraud_detection_seen_devices@Production"
-        )
-
-        # Load UNSEEN DEVICES model
-        self._load_model_pair(
-            model_name="unseen_devices",
-            model_uri=unseen_model_uri or "models:/fraud_detection_unseen_devices@Production"
-        )
+        self._load_model_pair(model_name="seen_devices")
+        self._load_model_pair(model_name="unseen_devices")
 
         print("✓ Both models loaded successfully\n")
 
-    def _load_model_pair(self, model_name, model_uri):
-        """
-        Load a model and its preprocessor from MLflow or local files.
+    def _load_model_pair(self, model_name):
+        model_version = 1
+        model_uri = f"models:/{model_name}/{model_version}"
+        client = MlflowClient()
 
-        Args:
-            model_name: 'seen_devices' or 'unseen_devices'
-            model_uri: MLflow URI for the model
-        """
-        model_path = MODELS_DIR / f"{model_name}_model.pkl"
-        preprocessor_path = MODELS_DIR / f"{model_name}_preprocessor.pkl"
-
-        # Try loading MODEL from MLflow first
-        print(f"  Loading {model_name} model from MLflow: {model_uri}")
-        model_from_mlflow = False
         try:
             model = mlflow.sklearn.load_model(model_uri)
-            print(f"  ✓ Loaded {model_name} model from MLflow")
-            model_from_mlflow = True
-
+            run_id = client.get_model_version(name=model_name, model_version=model_version).run_id
+            
+            preprocessor_uri = f"runs:/{run_id}/preprocessor/{model_name}_preprocessor.pkl"
+            preprocessor_path = mlflow.artifacts.download_artifacts(artifact_uri=preprocessor_uri)
+            with open(preprocessor_path, "rb") as f:
+                preprocessor = pickle.load(f)
+        
         except Exception as mlflow_error:
-            print(f"  ⚠ Failed to load model from MLflow: {mlflow_error}")
-            print(f"  Falling back to local model: {model_path}")
+            print(f"MLflow error: {mlflow_error}")
 
-            try:
-                with open(model_path, "rb") as f:
-                    model = pickle.load(f)
-                print(f"  ✓ Loaded {model_name} model from local file")
-
-            except Exception as local_error:
-                raise RuntimeError(
-                    f"Failed to load {model_name} model from MLflow and local path.\n"
-                    f"MLflow error: {mlflow_error}\n"
-                    f"Local error: {local_error}"
-                )
-
-        # Try loading PREPROCESSOR from MLflow (if model came from MLflow)
-        preprocessor = None
-        if model_from_mlflow:
-            try:
-                # Get the run_id from the model URI
-                client = MlflowClient()
-
-                # Parse model name from URI
-                registry_model_name = model_uri.split("/")[1].split("@")[0]
-
-                # Get the latest version with the specified alias
-                alias = model_uri.split("@")[1] if "@" in model_uri else "Production"
-                model_version = client.get_model_version_by_alias(registry_model_name, alias)
-                run_id = model_version.run_id
-
-                # Download preprocessor artifact from that run
-                artifact_path = f"preprocessor/{model_name}_preprocessor.pkl"
-                preprocessor_uri = f"runs:/{run_id}/{artifact_path}"
-
-                import tempfile
-                import os
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    local_path = mlflow.artifacts.download_artifacts(preprocessor_uri, dst_path=tmpdir)
-                    with open(local_path, "rb") as f:
-                        preprocessor = pickle.load(f)
-
-                print(f"  ✓ Loaded {model_name} preprocessor from MLflow")
-
-            except Exception as mlflow_preprocessor_error:
-                print(f"  ⚠ Failed to load preprocessor from MLflow: {mlflow_preprocessor_error}")
-                print(f"  Falling back to local preprocessor")
-
-        # Load preprocessor from local file if not loaded from MLflow
-        if preprocessor is None:
-            try:
-                with open(preprocessor_path, "rb") as f:
-                    preprocessor = pickle.load(f)
-                print(f"  ✓ Loaded {model_name} preprocessor from local file")
-
-            except Exception as e:
-                raise RuntimeError(f"Failed to load {model_name} preprocessor: {e}")
-
-        # Assign to instance variables
         if model_name == "seen_devices":
-            self.seen_model = model
             self.seen_preprocessor = preprocessor
-        elif model_name == "unseen_devices":
-            self.unseen_model = model
+            self.seen_model = model
+        else:
             self.unseen_preprocessor = preprocessor
+            self.unseen_model = model
+
+        print(f"Successfully loaded {model.name} model and preprocessor from Mlflow.")
 
 
     def handle_transaction(self, transaction_dict):
@@ -325,13 +253,7 @@ if __name__=="__main__":
     unseen_model_uri = "models:/fraud_detection_unseen_devices@Production"
 
     inference_consumer = InferenceConsumer(
-        db_url=db_url,
-        seen_model_uri=seen_model_uri,
-        unseen_model_uri=unseen_model_uri
+        db_url=db_url
     )
-
-    # If MLflow is not available, it will automatically fall back to local files:
-    # - models/seen_devices_model.pkl + models/seen_devices_preprocessor.pkl
-    # - models/unseen_devices_model.pkl + models/unseen_devices_preprocessor.pkl
 
     inference_consumer.start_consuming()

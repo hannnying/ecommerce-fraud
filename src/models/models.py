@@ -13,6 +13,8 @@ from sklearn.tree import DecisionTreeClassifier
 from xgboost import XGBClassifier
 from sklearn.model_selection import cross_val_score, GridSearchCV
 from src.preprocessing import FraudDataPreprocessor
+import tempfile
+import os
 import joblib
 
 
@@ -113,6 +115,33 @@ class FraudDetectionModel:
                 self.model = XGBClassifier()
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
+        
+    def _log_to_mlflow(self, cv_pr_auc):
+
+        # log training metrics and params
+        mlflow.sklearn.autolog(log_models=False)
+
+        # log cv score
+        mlflow.log_metric(key="cv_pr_auc", value=cv_pr_auc)
+        print(f"Logged average CV PR-AUC: {cv_pr_auc} to MLFlow.")
+
+        # log preprocessor artifact
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preprocessor_path = os.path.join(tmpdir, f"{self.model_name}_preprocessor.pkl")
+            
+            with open(preprocessor_path, "wb") as f:
+                pickle.dump(self.scaler, f)
+            
+            mlflow.log_artifact(local_path=preprocessor_path, artifact_path="preprocessor")
+            print(f"Preprocessor logged to MLflow for '{self.model_name} model'")
+
+        # log model artifact
+        mlflow.sklearn.log_model(
+            sk_model=self.model,
+            name="model",
+            registered_model_name=f"{self.model_name}_model"
+        )
+
 
     def fit(self, X_train, y_train, logging=True):
         """
@@ -141,56 +170,12 @@ class FraudDetectionModel:
         X_train_scaled = self.scaler.fit_transform(X_train)
 
         if logging:
-            # Log to the currently active MLflow run (started in train.py)
-            mlflow.sklearn.autolog(log_models=False)
+            cv_pr_auc_scores = cross_val_score(self.model, X_train_scaled, y_train, cv=5, scoring="average_precision")
 
-            cv_scores = cross_val_score(self.model, X_train_scaled, y_train, cv=5, scoring="average_precision")
-            print(f"Avergae PR-AUC: {cv_scores.mean()}")
-            
-            self.model.fit(X_train_scaled, y_train)
-
-            # Use model_name for registration (e.g., "seen_devices", "unseen_devices")
-            registered_name = f"fraud_detection_{self.model_name}"
-
-            # Log the trained model
-            mlflow.sklearn.log_model(
-                self.model,
-                "model",
-                registered_model_name=registered_name
-            )
-
-            # Log the preprocessor as a separate artifact
-            import tempfile
-            import os
-            with tempfile.TemporaryDirectory() as tmpdir:
-                preprocessor_path = os.path.join(tmpdir, f"{self.model_name}_preprocessor.pkl")
-                with open(preprocessor_path, "wb") as f:
-                    pickle.dump(self.scaler, f)
-                mlflow.log_artifact(preprocessor_path, "preprocessor")
-                print(f"Preprocessor logged to MLflow for '{registered_name}'")
+            self._log_to_mlflow(cv_pr_auc_scores.mean())
 
             run_id = mlflow.active_run().info.run_id
-            print(f"Model '{registered_name}' logged and registered with run_id: {run_id}")
-
-            mlflow_client = MlflowClient()
-
-            # Get the latest registered version
-            latest_versions = mlflow_client.search_model_versions(
-                filter_string=f"name='{registered_name}'",
-                order_by=["version_number DESC"],
-                max_results=1
-            )
-            if latest_versions:
-                latest_version = latest_versions[0]
-                # Set alias (new MLflow approach)
-                mlflow_client.set_registered_model_alias(
-                    name=registered_name,
-                    alias="Production",
-                    version=latest_version.version
-                )
-                print(f"Model '{registered_name}' version {latest_version.version} set to Production alias")
-            else:
-                print(f"Warning: Could not find registered model version for '{registered_name}'")
+            print(f"Model {self.model_name} logged and registered with run_id: {run_id}")
 
         else:
             self.model.fit(X_train_scaled, y_train)
