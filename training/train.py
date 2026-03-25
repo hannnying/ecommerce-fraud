@@ -15,6 +15,7 @@ from src.config import (
     FRAUD_WITH_COUNTRY_PATH,
     START_IDX,
     TARGET_COL,
+    db_url,
     categorical_features,
     numerical_features,
     boolean_features,
@@ -27,7 +28,7 @@ from src.models.models import FraudDetectionModel
 from src.models.rule_based import RuleBasedModel
 from src.state.device_state_flexible import DeviceState
 from src.state.global_bucket import GlobalVelocity
-from src.state.ip_state import IPState
+from src.state.prediction_store_sql import PredictionRepository
 from sklearn.metrics import average_precision_score, classification_report
 from sklearn.model_selection import cross_val_score
 from uuid import uuid4
@@ -48,6 +49,7 @@ class Train:
             self.processed_transaction_path = Path(processed_transaction_path)
         else:
             self.processed_transaction_path = None
+        self.prediction_repository = PredictionRepository(db_url=db_url)
 
     def train_model(self, model_name: str, df: pd.DataFrame):
         """
@@ -157,8 +159,17 @@ class Train:
             print(f"{'='*70}")
 
             # Save full processed data (Jan-Jun)
+            # locally
             processed_train.to_csv(processed_train_path, index=False)
             print(f"✓ Saved full processed data: {processed_train_path}")
+
+            # to database
+            processed_train.to_sql(
+                name="predictions",
+                con=self.prediction_repository.engine,
+                if_exists="replace"
+            )
+
             print(f"  Shape: {processed_train.shape}")
 
             print(f"{'='*70}\n")

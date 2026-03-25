@@ -129,9 +129,9 @@ PREDICTION_ATTR_DICT = {
     "under_18": Column(Integer),
 
     # Columns starting with numbers need safe Python attribute names
-    "age_18_25": Column("18_25", Integer),
-    "age_26_35": Column("26_35", Integer),
-    "age_36_50": Column("36_50", Integer),
+    "age_18_25": Column(Integer),
+    "age_26_35": Column(Integer),
+    "age_36_50": Column(Integer),
 
     "over_50": Column(Integer),
 
