@@ -61,15 +61,11 @@ class GlobalVelocity:
         timestamp_threshold = (last_txn["purchase_time"] - pd.Timedelta(days=1)).timestamp()
 
         for idx, row in df[df["purchase_time"] >= timestamp_threshold]:
-            current_bucket = int(row["purchase_time"].timestamp() // self.bucket_size_seconds)
-            country_bucket_key = f"{row["country"]}:txn_count:bucket:{current_bucket}"
-            global_bucket_key = f"global:txn_count:bucket:{current_bucket}"
-            
-            self.client.incr(global_bucket_key)
-            self.client.expire(global_bucket_key, 25 * 3600)
+            global_key = f"global:txn_timestamp"
+            country_key = f"country:{df["country"]}:txn_timestamp"
 
-            self.client.incr(country_bucket_key)
-            self.client.expire(country_bucket_key, 25 * 3600)
+            self.client.zadd(global_key, mapping={row["transaction_id"]: row["purchase_time"]})
+            self.client.zadd(country_key, mapping={row["transaction_id"]: row["purchase_time"]})
 
     def export_to_file(self, filepath: str) -> None:
         """
