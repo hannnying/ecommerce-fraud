@@ -87,7 +87,7 @@ PREDICTION_STORE_SCHEMA = {
     "age_18_25": FIELD_TYPES["int"],
     "age_26_35": FIELD_TYPES["int"],
     "age_36_50": FIELD_TYPES["int"],
-    "over_50": FIELD_TYPES["int"],
+    "age_50_above": FIELD_TYPES["int"],
     "amount_per_age": FIELD_TYPES["float"],
     "unknown_country": FIELD_TYPES["int"],
     "source": FIELD_TYPES["str"],
@@ -133,7 +133,7 @@ PREDICTION_ATTR_DICT = {
     "age_26_35": Column(Integer),
     "age_36_50": Column(Integer),
 
-    "over_50": Column(Integer),
+    "age_50_above": Column(Integer),
 
     "amount_per_age": Column(Float),
 
