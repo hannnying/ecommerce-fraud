@@ -170,6 +170,7 @@ class FraudDetectionModel:
         X_train_scaled = self.scaler.fit_transform(X_train)
 
         if logging:
+            self.model.fit(X_train_scaled, y_train)
             cv_pr_auc_scores = cross_val_score(self.model, X_train_scaled, y_train, cv=5, scoring="average_precision")
 
             self._log_to_mlflow(cv_pr_auc_scores.mean())
@@ -216,7 +217,11 @@ class FraudDetectionModel:
         np.array
             Predicted probabilities for each class
         """
-        X_scaled = self.scaler.transform(X)
+        try:
+            X_scaled = self.scaler.transform(X)
+        except ValueError as e:
+            print(f"{e} due to data being encoded before resampling and scaling.")
+            X_scaled = self.scaler.transform(pd.get_dummies(X))
         return self.model.predict_proba(X_scaled)[:, 1]
 
     def _extract_feature_importance(self, X_train):
