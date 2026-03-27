@@ -156,9 +156,9 @@ class DeviceState:
             self.client.hset(key, mapping=self._serialize_state(state))
 
         last_txn = df.iloc[-1]
-        timestamp_threshold = (last_txn["purchase_time"] - pd.Timedelta(days=1)).timestamp()
+        timestamp_threshold = pd.to_datetime((last_txn["purchase_time"] - pd.Timedelta(days=1)).timestamp(), unit='s')
         
-        for idx, row in df[df["purchase_time"] >= timestamp_threshold]:
+        for idx, row in df[df["purchase_time"] >= timestamp_threshold].iterrows():
             key = f"device:{id}:txn_timestamp"
             self.client.zadd(key, mapping={row["transaction_id"]: row["purchase_time"].timestamp()})
 

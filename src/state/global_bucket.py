@@ -58,14 +58,14 @@ class GlobalVelocity:
         """Construct velocity buckets from pandas dataframe."""
 
         last_txn = df.iloc[-1]
-        timestamp_threshold = (last_txn["purchase_time"] - pd.Timedelta(days=1)).timestamp()
+        timestamp_threshold = pd.to_datetime((last_txn["purchase_time"] - pd.Timedelta(days=1)).timestamp(), unit='s')
 
-        for idx, row in df[df["purchase_time"] >= timestamp_threshold]:
+        for idx, row in df[df["purchase_time"] >= timestamp_threshold].iterrows():
             global_key = f"global:txn_timestamp"
             country_key = f"country:{df["country"]}:txn_timestamp"
 
-            self.client.zadd(global_key, mapping={row["transaction_id"]: row["purchase_time"]})
-            self.client.zadd(country_key, mapping={row["transaction_id"]: row["purchase_time"]})
+            self.client.zadd(global_key, mapping={row["transaction_id"]: row["purchase_time"].timestamp()})
+            self.client.zadd(country_key, mapping={row["transaction_id"]: row["purchase_time"].timestamp()})
 
     def export_to_file(self, filepath: str) -> None:
         """
