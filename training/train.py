@@ -52,9 +52,6 @@ class Train:
         self.prediction_repository = PredictionRepository(db_url=db_url)
 
     def train_model(self, model_name: str, df: pd.DataFrame):
-        """
-        
-        """
         if model_name not in ["unseen_devices", "seen_devices"]:
             raise ValueError(f"model_name must be either unseen_devices or seen_devices")
         
@@ -72,6 +69,11 @@ class Train:
 
         y = df[TARGET_COL]
         model.fit(X, y)
+
+        df["fraud_proba"] = model.predict_proba(X)
+        df["model_used"] = model_name
+
+        return df
 
 
     def train_pipeline(self):
@@ -95,6 +97,7 @@ class Train:
         if self.processed_transaction_path and self.processed_transaction_path.exists() and self.processed_transaction_path.is_file():
             processed_train = pd.read_csv(self.processed_transaction_path)
             processed_train["purchase_time"] = pd.to_datetime(processed_train["purchase_time"])
+            processed_train["signup_time"] = pd.to_datetime(processed_train["signup_time"])
             print(f"Read full processed data from: {self.processed_transaction_path}...")
 
         else:
@@ -163,13 +166,6 @@ class Train:
             processed_train.to_csv(processed_train_path, index=False)
             print(f"✓ Saved full processed data: {processed_train_path}")
 
-            # to database
-            processed_train.to_sql(
-                name="predictions",
-                con=self.prediction_repository.engine,
-                if_exists="replace"
-            )
-
             print(f"  Shape: {processed_train.shape}")
 
             print(f"{'='*70}\n")
@@ -193,8 +189,32 @@ class Train:
             print(f"Started MLflow run: {run_id}")
             print(f"{'='*60}\n")
 
-            self.train_model(model_name="seen_devices", df=seen_devices_df)
-            self.train_model(model_name="unseen_devices", df=unknown_devices_df)
+            seen_devices_df = self.train_model(model_name="seen_devices", df=seen_devices_df)
+            unknown_devices_df = self.train_model(model_name="unseen_devices", df=unknown_devices_df)
+
+            seen_devices_df.to_sql(
+                name="predictions",
+                con=self.prediction_repository.engine,
+                if_exists="replace"
+            )
+
+            unknown_devices_df.to_sql(
+                name="predictions",
+                con=self.prediction_repository.engine,
+                if_exists="append"
+            )
+
+            # store Jan-Feb transactions in sql
+            jan_feb_transactions = processed_train[processed_train["purchase_time"] < march_start]
+            jan_feb_transactions["fraud_proba"] = None
+            jan_feb_transactions["model_used"] = None
+
+            jan_feb_transactions.to_sql(
+                name="predictions",
+                con=self.prediction_repository.engine,
+                if_exists="append"
+            )
+
 
             # Build and log drift references (logs to current run)
             print("Building and logging drift reference distributions...")
@@ -213,7 +233,7 @@ class Train:
             print(f"   - Training metadata: samples, fraud_rate, etc.")
             print(f"{'='*60}\n")
 
-        # save states
+        # if using processed data from local directory, and assuming last redis states are not saved, build redis states from processed data
         if self.processed_transaction_path:
             self.device_state.build_state_from_df(processed_train)
             self.global_velocity.build_bucket_from_df(processed_train)
