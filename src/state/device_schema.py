@@ -61,43 +61,6 @@ DEVICE_STATE_SCHEMA = {
     "prev_is_fraud": FIELD_TYPES["int"]
 }
 
-# PREDICTION STORE SCHEMA (Redis hash storage)
-# Stores values before scaling and encoding
-PREDICTION_STORE_SCHEMA = {
-    "transaction_id": FIELD_TYPES["str"],
-    "device_id": FIELD_TYPES["str"],
-    "purchase_value": FIELD_TYPES["float"],
-    "purchase_time": FIELD_TYPES["datetime"],
-    "device_txn_idx": FIELD_TYPES["int"],
-    "device_time_since_last_s": FIELD_TYPES["float"],
-    "device_age_hours": FIELD_TYPES["float"],
-    "signup_before_first_device_txn": FIELD_TYPES["int"],
-    "repeated_device_purchase": FIELD_TYPES["int"],
-    "purchase_spike": FIELD_TYPES["int"],
-    "identity_changed": FIELD_TYPES["int"],
-    "device_txn_velocity_24h": FIELD_TYPES["int"],
-    "prev_is_fraud": FIELD_TYPES["int"],
-    "global_txn_velocity_24h": FIELD_TYPES["int"],
-    "country_txn_velocity_24h": FIELD_TYPES["int"],
-
-    "time_setup_to_txn_seconds": FIELD_TYPES["float"],
-    "purchase_hour": FIELD_TYPES["int"],
-    "is_late_night": FIELD_TYPES["int"],
-    "under_18": FIELD_TYPES["int"],
-    "age_18_25": FIELD_TYPES["int"],
-    "age_26_35": FIELD_TYPES["int"],
-    "age_36_50": FIELD_TYPES["int"],
-    "age_50_above": FIELD_TYPES["int"],
-    "amount_per_age": FIELD_TYPES["float"],
-    "unknown_country": FIELD_TYPES["int"],
-    "source": FIELD_TYPES["str"],
-    "browser": FIELD_TYPES["str"],
-
-    "fraud_proba": FIELD_TYPES["float"],
-    "model_used": FIELD_TYPES["str"],
-    "true_label": FIELD_TYPES["int"]
-}
-
 # PREDICTION STORE SCHEMA (SQLAlchemy)
 PREDICTION_ATTR_DICT = {
     "__tablename__": "predictions",
@@ -141,9 +104,9 @@ PREDICTION_ATTR_DICT = {
     "source": Column(String),
     "browser": Column(String),
 
+    "rule_label": Column(Integer),
     "fraud_proba": Column(Float),
     "model_used": Column(String),
-
     "true_label": Column(Integer),
 }
 def get_field_names(schema):

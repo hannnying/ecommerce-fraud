@@ -105,7 +105,7 @@ class Train:
             processed_train = []
 
             for idx, row in df.iterrows():
-                transaction_id = str(uuid4())  # ✅ Fixed: Added parentheses
+                transaction_id = str(uuid4())
                 purchase_time = row["purchase_time"]
                 processed_transaction, transaction_id, (device_id, state_to_update) = self.feature_engineer.compute_features(row, training=True, transaction_id=transaction_id)
 
@@ -115,6 +115,7 @@ class Train:
                 processed_transaction["country"] = row["country"]
                 processed_transaction["signup_time"] = row["signup_time"]
                 processed_transaction["purchase_value"] = row["purchase_value"]
+                processed_transaction["true_label"] = row["is_fraud"]
 
                 # assess transaction risk using rules
                 processed_transaction["rule_label"] = RuleBasedModel().predict(processed_transaction)

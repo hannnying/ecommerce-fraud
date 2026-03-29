@@ -2,6 +2,8 @@
 # prereq: create db
 import pandas as pd
 from src.state.device_schema import PREDICTION_ATTR_DICT
+import pandas as pd
+from src.state.device_schema import PREDICTION_ATTR_DICT
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -49,10 +51,15 @@ class PredictionRepository:
 
     def fetch_training_dataset(self):
         """Return all labelled transactions for retraining."""
+        col_names = []
+        for k in PREDICTION_ATTR_DICT:
+            if not k.startswith("__"):
+                col_names.append(k)
+
+        columns = [getattr(PredictionModel, col) for col in col_names]
 
         with self.Session() as session:
-            transactions = session.query(PredictionModel).all()
+            transactions = session.query(*columns).all()
         
-        # this returns a Query object
-        return pd.DataFrame(transactions)
+        return pd.DataFrame(transactions, columns=col_names)
 
